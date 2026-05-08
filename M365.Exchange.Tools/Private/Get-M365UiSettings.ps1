@@ -11,6 +11,9 @@ function Get-M365UiSettings {
         HtmlBrandingEnabled  = $true
         HtmlShowCompanyName  = $true
         HtmlShowCompanyLogo  = $true
+        ThemePrimaryColor    = '#0f766e'
+        ThemeSecondaryColor  = '#1e293b'
+        ReportFontFamily     = 'Segoe UI'
     }
 
     if (-not (Test-Path -Path $settingsPath)) {
@@ -49,5 +52,8 @@ function Get-M365UiSettings {
         HtmlBrandingEnabled = if ($null -eq $settings.HtmlBrandingEnabled) { $true } else { [bool]$settings.HtmlBrandingEnabled }
         HtmlShowCompanyName = if ($null -eq $settings.HtmlShowCompanyName) { $true } else { [bool]$settings.HtmlShowCompanyName }
         HtmlShowCompanyLogo = if ($null -eq $settings.HtmlShowCompanyLogo) { $true } else { [bool]$settings.HtmlShowCompanyLogo }
+        ThemePrimaryColor   = if ([string]::IsNullOrWhiteSpace([string]$settings.ThemePrimaryColor)) { '#0f766e' } else { [string]$settings.ThemePrimaryColor }
+        ThemeSecondaryColor = if ([string]::IsNullOrWhiteSpace([string]$settings.ThemeSecondaryColor)) { '#1e293b' } else { [string]$settings.ThemeSecondaryColor }
+        ReportFontFamily    = if ([string]::IsNullOrWhiteSpace([string]$settings.ReportFontFamily)) { 'Segoe UI' } else { [string]$settings.ReportFontFamily }
     }
 }

@@ -68,5 +68,62 @@ Get-M365EntraDuplicateGroupUsageReport
 - Configuration menu includes report save path and file name template settings for generated files.
 - File name template supports tokens: `{Title}`, `{Timestamp}`, `{Date}`, `{Time}`, `{CompanyName}`.
 - Configuration menu includes HTML branding toggles: enable/disable branding, show/hide company name, and show/hide logo.
+- Configuration menu includes a native Windows settings form to edit Company Name, Logo, Save Path, File Name Template, theme colors (Primary/Secondary), and report font family (for example, `Verdana`).
+- Native Windows settings form includes a `Reset Defaults` button to restore recommended generic values quickly.
 - Configuration menu includes a logo preview option.
 - Popout report view supports profile filters for Users, Shared Mailboxes, Guests, and On-Prem Synced users, plus text search.
+- Choosing `Q. Quit` now signs out of Microsoft Graph, Exchange Online PowerShell, and Az (if loaded), clears PowerShell command history for the session, and clears the host view.
+
+## Git Hygiene
+
+- The tracked settings file `M365.Exchange.Tools/Config/M365.Exchange.Tools.Settings.json` is intentionally sanitized with generic values.
+- A pre-commit hook is included at `.githooks/pre-commit` to auto-sanitize the settings file before each commit.
+- Enable hooks once per clone:
+
+```powershell
+git config core.hooksPath .githooks
+```
+
+- You can run sanitization manually any time:
+
+```powershell
+.\scripts\Sanitize-M365Settings.ps1
+```
+
+## Configuration Guide
+
+Use `Configuration` from the main menu, then either:
+
+1. Use numbered options for quick changes.
+2. Use `22. Open native Windows settings form` for guided editing with examples.
+
+### Configuration Fields and Examples
+
+- `CompanyName`: Name shown in report branding.
+Example: `Contoso Ltd`
+- `LogoPath`: Full local path to logo image.
+Example: `C:\Branding\logo.png`
+- `ReportSavePath`: Folder path for generated CSV/PDF bundles.
+Example: `C:\Reports\M365`
+- `FileNameTemplate`: Output naming pattern.
+Example: `{CompanyName}-{Title}-{Date}-{Time}`
+- `ThemePrimaryColor`: Primary accent color in `#RRGGBB` format.
+Example: `#0f766e`
+- `ThemeSecondaryColor`: Secondary/header color in `#RRGGBB` format.
+Example: `#1e293b`
+- `ReportFontFamily`: Font used in HTML report body.
+Example: `Verdana`
+- `HtmlBrandingEnabled`: Enables/disables report branding section.
+Example: `true`
+- `HtmlShowCompanyName`: Shows/hides company name in report header.
+Example: `true`
+- `HtmlShowCompanyLogo`: Shows/hides logo image in report header.
+Example: `true`
+
+### Token Reference for FileNameTemplate
+
+- `{Title}`: Report title text
+- `{Timestamp}`: `yyyyMMdd-HHmmss`
+- `{Date}`: `yyyyMMdd`
+- `{Time}`: `HHmmss`
+- `{CompanyName}`: Sanitized company name token

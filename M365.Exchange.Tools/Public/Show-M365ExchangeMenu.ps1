@@ -137,12 +137,15 @@ function Show-M365ExchangeMenu {
         [CmdletBinding()]
         param(
             [Parameter(Mandatory)]
+            [AllowEmptyCollection()]
             [object[]]$FeatureRows,
 
-            [Parameter(Mandatory)]
+            [Parameter()]
+            [AllowEmptyCollection()]
             [object[]]$SkuRows,
 
-            [Parameter(Mandatory)]
+            [Parameter()]
+            [AllowEmptyCollection()]
             [object[]]$ServicePlanRows
         )
 
@@ -201,8 +204,6 @@ function Show-M365ExchangeMenu {
         $skuTitle = 'Detected Tenant SKUs (Sorted + Friendly Names)'
         $servicePlanTitle = 'Detected Tenant SKU Service Plans (Sorted + Friendly Names)'
 
-        Show-M365ReportData -InputObject $rows -Title $featureTitle -ForcePopout
-
         $skuRows = @()
         $servicePlanRows = @()
 
@@ -211,11 +212,9 @@ function Show-M365ExchangeMenu {
                 $cap.SkuCatalog |
                     Select-Object SkuFriendlyName, SkuPartNumber, SkuId
             )
-            Show-M365ReportData -InputObject $skuRows -Title $skuTitle -ForcePopout
         }
         elseif ($cap.SkuPartNumbers -and @($cap.SkuPartNumbers).Count -gt 0) {
             $skuRows = @($cap.SkuPartNumbers | ForEach-Object { [pscustomobject]@{ SkuPartNumber = $_ } })
-            Show-M365ReportData -InputObject $skuRows -Title 'Detected Tenant SKU Part Numbers' -ForcePopout
         }
 
         if ($cap.SkuServicePlans -and @($cap.SkuServicePlans).Count -gt 0) {
@@ -223,12 +222,64 @@ function Show-M365ExchangeMenu {
                 $cap.SkuServicePlans |
                     Select-Object SkuFriendlyName, SkuPartNumber, ServicePlanFriendlyName, ServicePlanName, ServicePlanId, ProvisioningStatus
             )
-            Show-M365ReportData -InputObject $servicePlanRows -Title $servicePlanTitle -ForcePopout
         }
 
-        if (Read-M365YesNo -Prompt 'Export feature availability data bundle to configured save path now?' -Default $true) {
-            Export-M365FeatureAvailabilityBundle -FeatureRows $rows -SkuRows $skuRows -ServicePlanRows $servicePlanRows
+        do {
+            Clear-Host
+            Write-Host 'Feature Availability' -ForegroundColor Cyan
+            Write-Host "License discovery status: $($cap.LicenseStatus)" -ForegroundColor ($(if ($cap.LicenseStatus -eq 'Detected') { 'Green' } else { 'Yellow' }))
+            Write-Host "SKU rows: $(@($skuRows).Count)"
+            Write-Host "Service plan rows: $(@($servicePlanRows).Count)"
+            Write-Host ''
+            Write-Host '1. View tenant feature availability report'
+            Write-Host '2. View detected SKUs'
+            Write-Host '3. View detected SKU service plans'
+            Write-Host '4. Export feature availability bundle (CSV + PDF)'
+            Write-Host 'B. Back'
+
+            $selection = Read-Host 'Select an option'
+            if ([string]::IsNullOrWhiteSpace($selection)) {
+                continue
+            }
+
+            $normalizedSelection = $selection.ToUpperInvariant()
+
+            switch ($normalizedSelection) {
+                '1' {
+                    Show-M365ReportData -InputObject $rows -Title $featureTitle -ForcePopout
+                }
+                '2' {
+                    if (@($skuRows).Count -eq 0) {
+                        Write-Host 'No SKU rows available to display.' -ForegroundColor Yellow
+                    }
+                    else {
+                        Show-M365ReportData -InputObject $skuRows -Title $skuTitle -ForcePopout
+                    }
+                }
+                '3' {
+                    if (@($servicePlanRows).Count -eq 0) {
+                        Write-Host 'No service plan rows available to display.' -ForegroundColor Yellow
+                    }
+                    else {
+                        Show-M365ReportData -InputObject $servicePlanRows -Title $servicePlanTitle -ForcePopout
+                    }
+                }
+                '4' {
+                    Export-M365FeatureAvailabilityBundle -FeatureRows $rows -SkuRows $skuRows -ServicePlanRows $servicePlanRows
+                }
+                'B' {
+                    return
+                }
+                Default {
+                    Write-Warning 'Unknown selection.'
+                }
+            }
+
+            if ($normalizedSelection -ne 'B') {
+                Read-Host 'Press Enter to continue' | Out-Null
+            }
         }
+        while ($true)
     }
 
     function Show-M365ExchangeExportMenu {
@@ -613,6 +664,339 @@ function Show-M365ExchangeMenu {
         while ($true)
     }
 
+    function Show-M365WindowsConfigurationForm {
+        [CmdletBinding()]
+        param()
+
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+
+        $settings = Get-M365UiSettings
+
+        $form = New-Object System.Windows.Forms.Form
+        $form.Text = 'M365 Exchange Tools - Configuration'
+        $form.Size = New-Object System.Drawing.Size(760, 640)
+        $form.StartPosition = 'CenterScreen'
+        $form.FormBorderStyle = 'FixedDialog'
+        $form.MaximizeBox = $false
+        $form.MinimizeBox = $false
+
+        $font = New-Object System.Drawing.Font('Segoe UI', 9)
+
+        $labels = @(
+            @{ Text = 'Company Name'; Y = 20 },
+            @{ Text = 'Logo Path'; Y = 60 },
+            @{ Text = 'Save Path'; Y = 100 },
+            @{ Text = 'File Name Template'; Y = 140 },
+            @{ Text = 'Primary Color (#RRGGBB)'; Y = 180 },
+            @{ Text = 'Secondary Color (#RRGGBB)'; Y = 220 },
+            @{ Text = 'Font Family'; Y = 260 }
+        )
+
+        foreach ($item in $labels) {
+            $label = New-Object System.Windows.Forms.Label
+            $label.Text = $item.Text
+            $label.Location = New-Object System.Drawing.Point(20, $item.Y)
+            $label.Size = New-Object System.Drawing.Size(200, 22)
+            $label.Font = $font
+            $form.Controls.Add($label)
+        }
+
+        $txtCompany = New-Object System.Windows.Forms.TextBox
+        $txtCompany.Location = New-Object System.Drawing.Point(230, 18)
+        $txtCompany.Size = New-Object System.Drawing.Size(410, 24)
+        $txtCompany.Font = $font
+        $txtCompany.Text = [string]$settings.CompanyName
+        $form.Controls.Add($txtCompany)
+
+        $lblCompanyHint = New-Object System.Windows.Forms.Label
+        $lblCompanyHint.Text = 'Example: Contoso Ltd'
+        $lblCompanyHint.Location = New-Object System.Drawing.Point(230, 42)
+        $lblCompanyHint.Size = New-Object System.Drawing.Size(280, 16)
+        $lblCompanyHint.Font = New-Object System.Drawing.Font('Segoe UI', 8)
+        $form.Controls.Add($lblCompanyHint)
+
+        $txtLogo = New-Object System.Windows.Forms.TextBox
+        $txtLogo.Location = New-Object System.Drawing.Point(230, 58)
+        $txtLogo.Size = New-Object System.Drawing.Size(330, 24)
+        $txtLogo.Font = $font
+        $txtLogo.Text = [string]$settings.LogoPath
+        $form.Controls.Add($txtLogo)
+
+        $lblLogoHint = New-Object System.Windows.Forms.Label
+        $lblLogoHint.Text = 'Example: C:\Branding\logo.png'
+        $lblLogoHint.Location = New-Object System.Drawing.Point(230, 82)
+        $lblLogoHint.Size = New-Object System.Drawing.Size(280, 16)
+        $lblLogoHint.Font = New-Object System.Drawing.Font('Segoe UI', 8)
+        $form.Controls.Add($lblLogoHint)
+
+        $btnLogoBrowse = New-Object System.Windows.Forms.Button
+        $btnLogoBrowse.Text = 'Browse...'
+        $btnLogoBrowse.Location = New-Object System.Drawing.Point(570, 56)
+        $btnLogoBrowse.Size = New-Object System.Drawing.Size(70, 28)
+        $btnLogoBrowse.Font = $font
+        $btnLogoBrowse.Add_Click({
+            $dialog = New-Object System.Windows.Forms.OpenFileDialog
+            $dialog.Filter = 'Image Files|*.png;*.jpg;*.jpeg;*.svg;*.gif;*.webp|All Files|*.*'
+            if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+                $txtLogo.Text = $dialog.FileName
+            }
+        })
+        $form.Controls.Add($btnLogoBrowse)
+
+        $txtSavePath = New-Object System.Windows.Forms.TextBox
+        $txtSavePath.Location = New-Object System.Drawing.Point(230, 98)
+        $txtSavePath.Size = New-Object System.Drawing.Size(330, 24)
+        $txtSavePath.Font = $font
+        $txtSavePath.Text = [string]$settings.ReportSavePath
+        $form.Controls.Add($txtSavePath)
+
+        $lblSavePathHint = New-Object System.Windows.Forms.Label
+        $lblSavePathHint.Text = 'Example: C:\Reports\M365'
+        $lblSavePathHint.Location = New-Object System.Drawing.Point(230, 122)
+        $lblSavePathHint.Size = New-Object System.Drawing.Size(280, 16)
+        $lblSavePathHint.Font = New-Object System.Drawing.Font('Segoe UI', 8)
+        $form.Controls.Add($lblSavePathHint)
+
+        $btnSaveBrowse = New-Object System.Windows.Forms.Button
+        $btnSaveBrowse.Text = 'Browse...'
+        $btnSaveBrowse.Location = New-Object System.Drawing.Point(570, 96)
+        $btnSaveBrowse.Size = New-Object System.Drawing.Size(70, 28)
+        $btnSaveBrowse.Font = $font
+        $btnSaveBrowse.Add_Click({
+            $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+            if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+                $txtSavePath.Text = $dialog.SelectedPath
+            }
+        })
+        $form.Controls.Add($btnSaveBrowse)
+
+        $txtTemplate = New-Object System.Windows.Forms.TextBox
+        $txtTemplate.Location = New-Object System.Drawing.Point(230, 138)
+        $txtTemplate.Size = New-Object System.Drawing.Size(410, 24)
+        $txtTemplate.Font = $font
+        $txtTemplate.Text = [string]$settings.FileNameTemplate
+        $form.Controls.Add($txtTemplate)
+
+        $lblTemplateHint = New-Object System.Windows.Forms.Label
+        $lblTemplateHint.Text = 'Example: {CompanyName}-{Title}-{Date}-{Time}'
+        $lblTemplateHint.Location = New-Object System.Drawing.Point(230, 162)
+        $lblTemplateHint.Size = New-Object System.Drawing.Size(410, 16)
+        $lblTemplateHint.Font = New-Object System.Drawing.Font('Segoe UI', 8)
+        $form.Controls.Add($lblTemplateHint)
+
+        $txtPrimaryColor = New-Object System.Windows.Forms.TextBox
+        $txtPrimaryColor.Location = New-Object System.Drawing.Point(230, 178)
+        $txtPrimaryColor.Size = New-Object System.Drawing.Size(200, 24)
+        $txtPrimaryColor.Font = $font
+        $txtPrimaryColor.Text = [string]$settings.ThemePrimaryColor
+        $form.Controls.Add($txtPrimaryColor)
+
+        $lblPrimaryHint = New-Object System.Windows.Forms.Label
+        $lblPrimaryHint.Text = 'Example: #0f766e'
+        $lblPrimaryHint.Location = New-Object System.Drawing.Point(230, 202)
+        $lblPrimaryHint.Size = New-Object System.Drawing.Size(220, 16)
+        $lblPrimaryHint.Font = New-Object System.Drawing.Font('Segoe UI', 8)
+        $form.Controls.Add($lblPrimaryHint)
+
+        $btnPrimaryColor = New-Object System.Windows.Forms.Button
+        $btnPrimaryColor.Text = 'Pick...'
+        $btnPrimaryColor.Location = New-Object System.Drawing.Point(440, 176)
+        $btnPrimaryColor.Size = New-Object System.Drawing.Size(70, 28)
+        $btnPrimaryColor.Font = $font
+        $btnPrimaryColor.Add_Click({
+            $dialog = New-Object System.Windows.Forms.ColorDialog
+            if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+                $txtPrimaryColor.Text = ('#{0:X2}{1:X2}{2:X2}' -f $dialog.Color.R, $dialog.Color.G, $dialog.Color.B)
+            }
+        })
+        $form.Controls.Add($btnPrimaryColor)
+
+        $txtSecondaryColor = New-Object System.Windows.Forms.TextBox
+        $txtSecondaryColor.Location = New-Object System.Drawing.Point(230, 218)
+        $txtSecondaryColor.Size = New-Object System.Drawing.Size(200, 24)
+        $txtSecondaryColor.Font = $font
+        $txtSecondaryColor.Text = [string]$settings.ThemeSecondaryColor
+        $form.Controls.Add($txtSecondaryColor)
+
+        $lblSecondaryHint = New-Object System.Windows.Forms.Label
+        $lblSecondaryHint.Text = 'Example: #1e293b'
+        $lblSecondaryHint.Location = New-Object System.Drawing.Point(230, 242)
+        $lblSecondaryHint.Size = New-Object System.Drawing.Size(220, 16)
+        $lblSecondaryHint.Font = New-Object System.Drawing.Font('Segoe UI', 8)
+        $form.Controls.Add($lblSecondaryHint)
+
+        $btnSecondaryColor = New-Object System.Windows.Forms.Button
+        $btnSecondaryColor.Text = 'Pick...'
+        $btnSecondaryColor.Location = New-Object System.Drawing.Point(440, 216)
+        $btnSecondaryColor.Size = New-Object System.Drawing.Size(70, 28)
+        $btnSecondaryColor.Font = $font
+        $btnSecondaryColor.Add_Click({
+            $dialog = New-Object System.Windows.Forms.ColorDialog
+            if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+                $txtSecondaryColor.Text = ('#{0:X2}{1:X2}{2:X2}' -f $dialog.Color.R, $dialog.Color.G, $dialog.Color.B)
+            }
+        })
+        $form.Controls.Add($btnSecondaryColor)
+
+        $cmbFont = New-Object System.Windows.Forms.ComboBox
+        $cmbFont.Location = New-Object System.Drawing.Point(230, 258)
+        $cmbFont.Size = New-Object System.Drawing.Size(300, 24)
+        $cmbFont.Font = $font
+        $cmbFont.DropDownStyle = 'DropDown'
+        $fontChoices = @('Segoe UI', 'Verdana', 'Calibri', 'Tahoma', 'Arial', 'Cambria', 'Trebuchet MS', 'Consolas')
+        [void]$cmbFont.Items.AddRange($fontChoices)
+        $cmbFont.Text = [string]$settings.ReportFontFamily
+        $form.Controls.Add($cmbFont)
+
+        $lblFontHint = New-Object System.Windows.Forms.Label
+        $lblFontHint.Text = 'Example: Verdana'
+        $lblFontHint.Location = New-Object System.Drawing.Point(230, 282)
+        $lblFontHint.Size = New-Object System.Drawing.Size(220, 16)
+        $lblFontHint.Font = New-Object System.Drawing.Font('Segoe UI', 8)
+        $form.Controls.Add($lblFontHint)
+
+        $chkBranding = New-Object System.Windows.Forms.CheckBox
+        $chkBranding.Text = 'Enable HTML branding'
+        $chkBranding.Location = New-Object System.Drawing.Point(230, 320)
+        $chkBranding.Size = New-Object System.Drawing.Size(220, 24)
+        $chkBranding.Font = $font
+        $chkBranding.Checked = [bool]$settings.HtmlBrandingEnabled
+        $form.Controls.Add($chkBranding)
+
+        $chkShowName = New-Object System.Windows.Forms.CheckBox
+        $chkShowName.Text = 'Show company name in HTML'
+        $chkShowName.Location = New-Object System.Drawing.Point(230, 350)
+        $chkShowName.Size = New-Object System.Drawing.Size(260, 24)
+        $chkShowName.Font = $font
+        $chkShowName.Checked = [bool]$settings.HtmlShowCompanyName
+        $form.Controls.Add($chkShowName)
+
+        $chkShowLogo = New-Object System.Windows.Forms.CheckBox
+        $chkShowLogo.Text = 'Show company logo in HTML'
+        $chkShowLogo.Location = New-Object System.Drawing.Point(230, 380)
+        $chkShowLogo.Size = New-Object System.Drawing.Size(260, 24)
+        $chkShowLogo.Font = $font
+        $chkShowLogo.Checked = [bool]$settings.HtmlShowCompanyLogo
+        $form.Controls.Add($chkShowLogo)
+
+        $lblTokens = New-Object System.Windows.Forms.Label
+        $lblTokens.Text = 'Template tokens: {Title} {Timestamp} {Date} {Time} {CompanyName}'
+        $lblTokens.Location = New-Object System.Drawing.Point(230, 410)
+        $lblTokens.Size = New-Object System.Drawing.Size(500, 24)
+        $lblTokens.Font = $font
+        $form.Controls.Add($lblTokens)
+
+        $btnSave = New-Object System.Windows.Forms.Button
+        $btnSave.Text = 'Save'
+        $btnSave.Location = New-Object System.Drawing.Point(470, 510)
+        $btnSave.Size = New-Object System.Drawing.Size(80, 30)
+        $btnSave.Font = $font
+        $btnSave.Add_Click({
+            $primary = $txtPrimaryColor.Text.Trim()
+            $secondary = $txtSecondaryColor.Text.Trim()
+            if ($primary -notmatch '^#?[0-9A-Fa-f]{6}$') {
+                [System.Windows.Forms.MessageBox]::Show('Primary color must be in #RRGGBB format.', 'Validation', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+                return
+            }
+            if ($secondary -notmatch '^#?[0-9A-Fa-f]{6}$') {
+                [System.Windows.Forms.MessageBox]::Show('Secondary color must be in #RRGGBB format.', 'Validation', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+                return
+            }
+
+            $primary = if ($primary.StartsWith('#')) { $primary } else { "#$primary" }
+            $secondary = if ($secondary.StartsWith('#')) { $secondary } else { "#$secondary" }
+
+            Set-M365UiSettings \
+                -CompanyName $txtCompany.Text \
+                -LogoPath $txtLogo.Text \
+                -ReportSavePath $txtSavePath.Text \
+                -FileNameTemplate $txtTemplate.Text \
+                -ThemePrimaryColor $primary \
+                -ThemeSecondaryColor $secondary \
+                -ReportFontFamily $cmbFont.Text \
+                -HtmlBrandingEnabled $chkBranding.Checked \
+                -HtmlShowCompanyName $chkShowName.Checked \
+                -HtmlShowCompanyLogo $chkShowLogo.Checked | Out-Null
+
+            $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+            $form.Close()
+        })
+        $form.Controls.Add($btnSave)
+
+        $btnReset = New-Object System.Windows.Forms.Button
+        $btnReset.Text = 'Reset Defaults'
+        $btnReset.Location = New-Object System.Drawing.Point(350, 510)
+        $btnReset.Size = New-Object System.Drawing.Size(110, 30)
+        $btnReset.Font = $font
+        $btnReset.Add_Click({
+            $txtCompany.Text = 'Contoso'
+            $txtLogo.Text = ''
+            $txtSavePath.Text = ''
+            $txtTemplate.Text = '{Title}-{Timestamp}'
+            $txtPrimaryColor.Text = '#0f766e'
+            $txtSecondaryColor.Text = '#1e293b'
+            $cmbFont.Text = 'Segoe UI'
+            $chkBranding.Checked = $true
+            $chkShowName.Checked = $true
+            $chkShowLogo.Checked = $true
+        })
+        $form.Controls.Add($btnReset)
+
+        $btnCancel = New-Object System.Windows.Forms.Button
+        $btnCancel.Text = 'Cancel'
+        $btnCancel.Location = New-Object System.Drawing.Point(560, 510)
+        $btnCancel.Size = New-Object System.Drawing.Size(80, 30)
+        $btnCancel.Font = $font
+        $btnCancel.Add_Click({ $form.Close() })
+        $form.Controls.Add($btnCancel)
+
+        [void]$form.ShowDialog()
+    }
+
+    function Invoke-M365SignOutOnExit {
+        [CmdletBinding()]
+        param()
+
+        Write-Host 'Signing out of active module sessions...' -ForegroundColor Cyan
+
+        try {
+            $disconnectMgGraphCommand = Get-Command -Name Disconnect-MgGraph -ErrorAction SilentlyContinue
+            if ($disconnectMgGraphCommand) {
+                Disconnect-MgGraph -ErrorAction SilentlyContinue
+            }
+        }
+        catch {
+        }
+
+        try {
+            $disconnectExchangeCommand = Get-Command -Name Disconnect-ExchangeOnline -ErrorAction SilentlyContinue
+            if ($disconnectExchangeCommand) {
+                Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue
+            }
+        }
+        catch {
+        }
+
+        try {
+            $disconnectAzCommand = Get-Command -Name Disconnect-AzAccount -ErrorAction SilentlyContinue
+            if ($disconnectAzCommand) {
+                Disconnect-AzAccount -Scope Process -ErrorAction SilentlyContinue | Out-Null
+            }
+        }
+        catch {
+        }
+
+        try {
+            Clear-History -ErrorAction SilentlyContinue
+        }
+        catch {
+        }
+
+        Write-Host 'Module sessions disconnected. Clearing host view...' -ForegroundColor DarkCyan
+        Clear-Host
+    }
+
     function Show-M365ConfigurationMenu {
         [CmdletBinding()]
         param()
@@ -640,6 +1024,10 @@ function Show-M365ExchangeMenu {
             Write-Host '16. Toggle company name in HTML'
             Write-Host "17. Show company logo in HTML: $($settings.HtmlShowCompanyLogo)"
             Write-Host '18. Toggle company logo in HTML'
+            Write-Host "19. Primary color: $(if ([string]::IsNullOrWhiteSpace($settings.ThemePrimaryColor)) { '#0f766e' } else { $settings.ThemePrimaryColor })"
+            Write-Host "20. Secondary color: $(if ([string]::IsNullOrWhiteSpace($settings.ThemeSecondaryColor)) { '#1e293b' } else { $settings.ThemeSecondaryColor })"
+            Write-Host "21. Report font: $(if ([string]::IsNullOrWhiteSpace($settings.ReportFontFamily)) { 'Segoe UI' } else { $settings.ReportFontFamily })"
+            Write-Host '22. Open native Windows settings form'
             Write-Host 'B. Back'
 
             $selection = Read-Host 'Select an option'
@@ -741,7 +1129,7 @@ function Show-M365ExchangeMenu {
                     Write-Host "Report save path is currently: $(if ([string]::IsNullOrWhiteSpace($settings.ReportSavePath)) { '[Default: Documents\\M365-Exchange-Exports]' } else { $settings.ReportSavePath })" -ForegroundColor Green
                 }
                 '10' {
-                    $savePathInput = Read-Host 'Enter report save path (leave blank to use default in Documents)'
+                    $savePathInput = Read-Host 'Enter report save path (example: C:\Reports\M365). Leave blank to use default in Documents'
                     if ([string]::IsNullOrWhiteSpace($savePathInput)) {
                         Set-M365UiSettings -ReportSavePath '' | Out-Null
                         Write-Host 'Report save path reset to default.' -ForegroundColor Green
@@ -757,7 +1145,7 @@ function Show-M365ExchangeMenu {
                     Write-Host 'Supported tokens: {Title} {Timestamp} {Date} {Time} {CompanyName}' -ForegroundColor DarkCyan
                 }
                 '12' {
-                    $templateInput = Read-Host 'Enter file name template (tokens: {Title} {Timestamp} {Date} {Time} {CompanyName})'
+                    $templateInput = Read-Host 'Enter file name template (example: {CompanyName}-{Title}-{Date}-{Time}; tokens: {Title} {Timestamp} {Date} {Time} {CompanyName})'
                     if ([string]::IsNullOrWhiteSpace($templateInput)) {
                         Set-M365UiSettings -FileNameTemplate '{Title}-{Timestamp}' | Out-Null
                         Write-Host 'File name template reset to default.' -ForegroundColor Green
@@ -790,6 +1178,19 @@ function Show-M365ExchangeMenu {
                     $newValue = -not [bool]$settings.HtmlShowCompanyLogo
                     Set-M365UiSettings -HtmlShowCompanyLogo $newValue | Out-Null
                     Write-Host "Show company logo in HTML set to: $newValue" -ForegroundColor Green
+                }
+                '19' {
+                    Write-Host "Primary color is currently: $(if ([string]::IsNullOrWhiteSpace($settings.ThemePrimaryColor)) { '#0f766e' } else { $settings.ThemePrimaryColor })" -ForegroundColor Green
+                }
+                '20' {
+                    Write-Host "Secondary color is currently: $(if ([string]::IsNullOrWhiteSpace($settings.ThemeSecondaryColor)) { '#1e293b' } else { $settings.ThemeSecondaryColor })" -ForegroundColor Green
+                }
+                '21' {
+                    Write-Host "Report font is currently: $(if ([string]::IsNullOrWhiteSpace($settings.ReportFontFamily)) { 'Segoe UI' } else { $settings.ReportFontFamily })" -ForegroundColor Green
+                }
+                '22' {
+                    Show-M365WindowsConfigurationForm
+                    Write-Host 'Native Windows configuration form closed.' -ForegroundColor Green
                 }
                 'B' {
                     return
@@ -851,6 +1252,7 @@ function Show-M365ExchangeMenu {
                     Show-M365FeatureAvailability
                 }
                 'Q' {
+                    Invoke-M365SignOutOnExit
                     return
                 }
                 Default {

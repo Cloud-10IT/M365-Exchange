@@ -50,6 +50,17 @@ function Show-M365ReportData {
     $htmlShowCompanyLogo = [bool]$settings.HtmlShowCompanyLogo
     $configuredSavePath = [string]$settings.ReportSavePath
     $configuredTemplate = [string]$settings.FileNameTemplate
+    $configuredPrimaryColor = [string]$settings.ThemePrimaryColor
+    $configuredSecondaryColor = [string]$settings.ThemeSecondaryColor
+    $configuredFontFamily = [string]$settings.ReportFontFamily
+
+    $themePrimary = if ($configuredPrimaryColor -match '^#?[0-9A-Fa-f]{6}$') { if ($configuredPrimaryColor.StartsWith('#')) { $configuredPrimaryColor } else { "#$configuredPrimaryColor" } } else { '#0f766e' }
+    $themeSecondary = if ($configuredSecondaryColor -match '^#?[0-9A-Fa-f]{6}$') { if ($configuredSecondaryColor.StartsWith('#')) { $configuredSecondaryColor } else { "#$configuredSecondaryColor" } } else { '#1e293b' }
+    $themeFontFamily = ($configuredFontFamily -replace '[^A-Za-z0-9,\- ]', '').Trim()
+    if ([string]::IsNullOrWhiteSpace($themeFontFamily)) {
+      $themeFontFamily = 'Segoe UI'
+    }
+    $cssFontFamily = "'$themeFontFamily'"
 
     $safeCompanyName = if (($htmlBrandingEnabled -and $htmlShowCompanyName) -and -not [string]::IsNullOrWhiteSpace($companyName)) { [System.Net.WebUtility]::HtmlEncode($companyName) } else { '' }
     $logoUri = ''
@@ -111,7 +122,8 @@ function Show-M365ReportData {
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --primary:#0f766e;--primary-h:#0d9488;--primary-dk:#0d5c57;
+  --primary:__THEME_PRIMARY__;--primary-h:__THEME_PRIMARY__;--primary-dk:__THEME_PRIMARY__;
+  --secondary:__THEME_SECONDARY__;
   --surf:#fff;--surf2:#f8fafc;--surf3:#f1f5f9;
   --bd:#e2e8f0;--bd2:#cbd5e1;
   --t1:#0f172a;--t2:#334155;--t3:#64748b;--t4:#94a3b8;
@@ -125,10 +137,10 @@ function Show-M365ReportData {
   --sh2:0 4px 6px -1px rgba(0,0,0,.07),0 2px 4px -2px rgba(0,0,0,.05);
 }
 html,body{height:100%}
-body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--surf2);color:var(--t1);display:flex;flex-direction:column;min-height:100vh;font-size:13px;line-height:1.5}
+body{font-family:__THEME_FONT__,system-ui,-apple-system,sans-serif;background:var(--surf2);color:var(--t1);display:flex;flex-direction:column;min-height:100vh;font-size:13px;line-height:1.5}
 
 /* topbar */
-.topbar{background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);height:50px;padding:0 18px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;box-shadow:0 2px 8px rgba(0,0,0,.28)}
+.topbar{background:linear-gradient(135deg,var(--primary-dk) 0%,var(--secondary) 100%);height:50px;padding:0 18px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;box-shadow:0 2px 8px rgba(0,0,0,.28)}
 .tb-left{display:flex;align-items:center;gap:10px;overflow:hidden}
 .tb-divider{width:1px;height:20px;background:#334155;flex-shrink:0}
 .brand-logo{height:26px;width:auto;max-width:130px;object-fit:contain;border-radius:3px;flex-shrink:0}
@@ -231,7 +243,7 @@ td.null{color:var(--t4)}
 /* hover card */
 #hoverCard{position:fixed;z-index:9999;background:#fff;border:1px solid var(--bd2);border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.18),0 2px 8px rgba(0,0,0,.1);min-width:230px;max-width:340px;pointer-events:all;opacity:0;transition:opacity .13s ease;overflow:hidden}
 #hoverCard.show{opacity:1}
-.hc-head{background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);padding:11px 15px 10px;color:#f1f5f9;font-size:13px;font-weight:700;word-break:break-word;line-height:1.3}
+.hc-head{background:linear-gradient(135deg,var(--primary-dk) 0%,var(--secondary) 100%);padding:11px 15px 10px;color:#f1f5f9;font-size:13px;font-weight:700;word-break:break-word;line-height:1.3}
 .hc-body{padding:8px 14px 10px;display:flex;flex-direction:column;gap:0;max-height:300px;overflow-y:auto}
 .hc-row{display:flex;gap:8px;align-items:flex-start;padding:3px 0;border-bottom:1px solid var(--bd)}
 .hc-row:last-child{border-bottom:none}
@@ -750,6 +762,9 @@ applyFilters();
   $html = $html.Replace('__JS_TITLE__', $jsSafeTitle)
   $html = $html.Replace('__CHART_COLUMN__', $safeChartColumn)
   $html = $html.Replace('__EXPAND_COLUMN__', $safeExpandColumn)
+  $html = $html.Replace('__THEME_PRIMARY__', $themePrimary)
+  $html = $html.Replace('__THEME_SECONDARY__', $themeSecondary)
+  $html = $html.Replace('__THEME_FONT__', $cssFontFamily)
 
     Set-Content -Path $reportPath -Value $html -Encoding UTF8
 

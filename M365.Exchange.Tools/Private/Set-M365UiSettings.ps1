@@ -24,7 +24,16 @@ function Set-M365UiSettings {
         [bool]$HtmlShowCompanyName,
 
         [Parameter()]
-        [bool]$HtmlShowCompanyLogo
+        [bool]$HtmlShowCompanyLogo,
+
+        [Parameter()]
+        [string]$ThemePrimaryColor,
+
+        [Parameter()]
+        [string]$ThemeSecondaryColor,
+
+        [Parameter()]
+        [string]$ReportFontFamily
     )
 
     $moduleRoot = Split-Path -Path $PSScriptRoot -Parent
@@ -46,6 +55,9 @@ function Set-M365UiSettings {
         HtmlBrandingEnabled = if ($PSBoundParameters.ContainsKey('HtmlBrandingEnabled')) { [bool]$HtmlBrandingEnabled } else { [bool]$currentSettings.HtmlBrandingEnabled }
         HtmlShowCompanyName = if ($PSBoundParameters.ContainsKey('HtmlShowCompanyName')) { [bool]$HtmlShowCompanyName } else { [bool]$currentSettings.HtmlShowCompanyName }
         HtmlShowCompanyLogo = if ($PSBoundParameters.ContainsKey('HtmlShowCompanyLogo')) { [bool]$HtmlShowCompanyLogo } else { [bool]$currentSettings.HtmlShowCompanyLogo }
+        ThemePrimaryColor   = if ($PSBoundParameters.ContainsKey('ThemePrimaryColor')) { [string]$ThemePrimaryColor } else { [string]$currentSettings.ThemePrimaryColor }
+        ThemeSecondaryColor = if ($PSBoundParameters.ContainsKey('ThemeSecondaryColor')) { [string]$ThemeSecondaryColor } else { [string]$currentSettings.ThemeSecondaryColor }
+        ReportFontFamily    = if ($PSBoundParameters.ContainsKey('ReportFontFamily')) { [string]$ReportFontFamily } else { [string]$currentSettings.ReportFontFamily }
     }
 
     $settings | ConvertTo-Json -Depth 5 | Set-Content -Path $settingsPath -Encoding UTF8

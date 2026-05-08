@@ -1,0 +1,17 @@
+#!/usr/bin/env sh
+set -e
+
+repo_root="$(git rev-parse --show-toplevel)"
+script_path="$repo_root/scripts/Sanitize-M365Settings.ps1"
+settings_rel="M365.Exchange.Tools/Config/M365.Exchange.Tools.Settings.json"
+
+if command -v pwsh >/dev/null 2>&1; then
+  pwsh -NoProfile -ExecutionPolicy Bypass -File "$script_path"
+elif command -v powershell >/dev/null 2>&1; then
+  powershell -NoProfile -ExecutionPolicy Bypass -File "$script_path"
+else
+  echo "No PowerShell host found (pwsh/powershell). Cannot sanitize settings." >&2
+  exit 1
+fi
+
+git add "$settings_rel"
