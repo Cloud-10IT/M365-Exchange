@@ -9,7 +9,22 @@ function Set-M365UiSettings {
         [string]$CompanyName,
 
         [Parameter()]
-        [string]$LogoPath
+        [string]$LogoPath,
+
+        [Parameter()]
+        [string]$ReportSavePath,
+
+        [Parameter()]
+        [string]$FileNameTemplate,
+
+        [Parameter()]
+        [bool]$HtmlBrandingEnabled,
+
+        [Parameter()]
+        [bool]$HtmlShowCompanyName,
+
+        [Parameter()]
+        [bool]$HtmlShowCompanyLogo
     )
 
     $moduleRoot = Split-Path -Path $PSScriptRoot -Parent
@@ -23,9 +38,14 @@ function Set-M365UiSettings {
     $currentSettings = Get-M365UiSettings
 
     $settings = @{
-        BrowserPopout = if ($PSBoundParameters.ContainsKey('BrowserPopout')) { [string]$BrowserPopout } else { [string]$currentSettings.BrowserPopout }
-        CompanyName   = if ($PSBoundParameters.ContainsKey('CompanyName')) { [string]$CompanyName } else { [string]$currentSettings.CompanyName }
-        LogoPath      = if ($PSBoundParameters.ContainsKey('LogoPath')) { [string]$LogoPath } else { [string]$currentSettings.LogoPath }
+        BrowserPopout       = if ($PSBoundParameters.ContainsKey('BrowserPopout')) { [string]$BrowserPopout } else { [string]$currentSettings.BrowserPopout }
+        CompanyName         = if ($PSBoundParameters.ContainsKey('CompanyName')) { [string]$CompanyName } else { [string]$currentSettings.CompanyName }
+        LogoPath            = if ($PSBoundParameters.ContainsKey('LogoPath')) { [string]$LogoPath } else { [string]$currentSettings.LogoPath }
+        ReportSavePath      = if ($PSBoundParameters.ContainsKey('ReportSavePath')) { [string]$ReportSavePath } else { [string]$currentSettings.ReportSavePath }
+        FileNameTemplate    = if ($PSBoundParameters.ContainsKey('FileNameTemplate')) { [string]$FileNameTemplate } else { [string]$currentSettings.FileNameTemplate }
+        HtmlBrandingEnabled = if ($PSBoundParameters.ContainsKey('HtmlBrandingEnabled')) { [bool]$HtmlBrandingEnabled } else { [bool]$currentSettings.HtmlBrandingEnabled }
+        HtmlShowCompanyName = if ($PSBoundParameters.ContainsKey('HtmlShowCompanyName')) { [bool]$HtmlShowCompanyName } else { [bool]$currentSettings.HtmlShowCompanyName }
+        HtmlShowCompanyLogo = if ($PSBoundParameters.ContainsKey('HtmlShowCompanyLogo')) { [bool]$HtmlShowCompanyLogo } else { [bool]$currentSettings.HtmlShowCompanyLogo }
     }
 
     $settings | ConvertTo-Json -Depth 5 | Set-Content -Path $settingsPath -Encoding UTF8

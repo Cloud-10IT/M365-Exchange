@@ -24,6 +24,164 @@ function Show-M365ExchangeMenu {
         Show-M365ReportData -InputObject $reportData -Title 'Mailbox Delegation Report'
     }
 
+    function Get-M365ConfiguredSavePath {
+        [CmdletBinding()]
+        param()
+
+        $settings = Get-M365UiSettings
+        $configuredPath = [string]$settings.ReportSavePath
+        if ([string]::IsNullOrWhiteSpace($configuredPath)) {
+            return (Join-Path -Path ([Environment]::GetFolderPath('MyDocuments')) -ChildPath 'M365-Exchange-Exports')
+        }
+
+        return $configuredPath
+    }
+
+    function New-M365ConfiguredFileStem {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory)]
+            [string]$Title
+        )
+
+        $settings = Get-M365UiSettings
+        $template = if ([string]::IsNullOrWhiteSpace([string]$settings.FileNameTemplate)) { '{Title}-{Timestamp}' } else { [string]$settings.FileNameTemplate }
+        $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+        $dateToken = Get-Date -Format 'yyyyMMdd'
+        $timeToken = Get-Date -Format 'HHmmss'
+
+        $titleToken = ($Title -replace '[^A-Za-z0-9\-_ ]', '' -replace ' +', '-').Trim('-')
+        if ([string]::IsNullOrWhiteSpace($titleToken)) {
+            $titleToken = 'M365-Report'
+        }
+
+        $companyNameToken = ([string]$settings.CompanyName -replace '[^A-Za-z0-9\-_ ]', '' -replace ' +', '-').Trim('-')
+        $fileStem = $template
+        $fileStem = $fileStem.Replace('{Title}', $titleToken)
+        $fileStem = $fileStem.Replace('{Timestamp}', $timestamp)
+        $fileStem = $fileStem.Replace('{Date}', $dateToken)
+        $fileStem = $fileStem.Replace('{Time}', $timeToken)
+        $fileStem = $fileStem.Replace('{CompanyName}', $companyNameToken)
+        $fileStem = ($fileStem -replace '[^A-Za-z0-9\-_ ]', '' -replace ' +', '-').Trim('-')
+
+        if ([string]::IsNullOrWhiteSpace($fileStem)) {
+            return "M365-Report-$timestamp"
+        }
+
+        return $fileStem
+    }
+
+    function Convert-M365HtmlToPdf {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory)]
+            [string]$HtmlPath,
+
+            [Parameter(Mandatory)]
+            [string]$PdfPath
+        )
+
+        if (-not (Test-Path -Path $HtmlPath)) {
+            return $false
+        }
+
+        $edgePaths = @(
+            'msedge.exe',
+            'C:\Program Files\Microsoft\Edge\Application\msedge.exe',
+            'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+        )
+
+        $edgeExecutable = $null
+        foreach ($edgePath in $edgePaths) {
+            $edgeCommand = Get-Command -Name $edgePath -ErrorAction SilentlyContinue
+            if ($edgeCommand) {
+                $edgeExecutable = $edgeCommand.Source
+                break
+            }
+
+            if (Test-Path -Path $edgePath) {
+                $edgeExecutable = $edgePath
+                break
+            }
+        }
+
+        if (-not $edgeExecutable) {
+            return $false
+        }
+
+        $pdfDirectory = Split-Path -Path $PdfPath -Parent
+        if ($pdfDirectory -and -not (Test-Path -Path $pdfDirectory)) {
+            New-Item -Path $pdfDirectory -ItemType Directory -Force | Out-Null
+        }
+
+        $htmlUri = ([System.Uri]$HtmlPath).AbsoluteUri
+        $args = @(
+            '--headless',
+            '--disable-gpu',
+            '--print-to-pdf=' + $PdfPath,
+            '--no-first-run',
+            '--no-default-browser-check',
+            $htmlUri
+        )
+
+        try {
+            $process = Start-Process -FilePath $edgeExecutable -ArgumentList $args -Wait -PassThru
+            return (($process.ExitCode -eq 0) -and (Test-Path -Path $PdfPath))
+        }
+        catch {
+            return $false
+        }
+    }
+
+    function Export-M365FeatureAvailabilityBundle {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory)]
+            [object[]]$FeatureRows,
+
+            [Parameter(Mandatory)]
+            [object[]]$SkuRows,
+
+            [Parameter(Mandatory)]
+            [object[]]$ServicePlanRows
+        )
+
+        $savePath = Get-M365ConfiguredSavePath
+        if (-not (Test-Path -Path $savePath)) {
+            New-Item -Path $savePath -ItemType Directory -Force | Out-Null
+        }
+
+        $exports = @(
+            @{ Title = 'Tenant Feature Availability'; Rows = @($FeatureRows) }
+            @{ Title = 'Detected Tenant SKUs'; Rows = @($SkuRows) }
+            @{ Title = 'Detected Tenant SKU Service Plans'; Rows = @($ServicePlanRows) }
+        )
+
+        foreach ($export in $exports) {
+            $rows = @($export.Rows)
+            if ($rows.Count -eq 0) {
+                continue
+            }
+
+            $stem = New-M365ConfiguredFileStem -Title $export.Title
+            $csvPath = Join-Path -Path $savePath -ChildPath ($stem + '.csv')
+            Export-M365ReportData -InputObject $rows -ExportPath $csvPath | Out-Null
+
+            $htmlReport = Show-M365ReportData -InputObject $rows -Title $export.Title -ForcePopout -NoOpenBrowser -PassThru
+            if ($htmlReport -and -not [string]::IsNullOrWhiteSpace([string]$htmlReport.ReportPath)) {
+                $pdfPath = Join-Path -Path $savePath -ChildPath ($stem + '.pdf')
+                if (Convert-M365HtmlToPdf -HtmlPath $htmlReport.ReportPath -PdfPath $pdfPath) {
+                    Write-Host "Exported PDF: $pdfPath" -ForegroundColor Green
+                }
+                else {
+                    Write-Host "PDF export skipped for '$($export.Title)' (Edge headless print unavailable)." -ForegroundColor Yellow
+                }
+            }
+        }
+
+        Write-Host "Feature availability bundle exported to: $savePath" -ForegroundColor Green
+    }
+
     function Show-M365FeatureAvailability {
         [CmdletBinding()]
         param()
@@ -39,11 +197,37 @@ function Show-M365ExchangeMenu {
             [pscustomobject]@{ Feature = 'Advanced Entra duplicate analysis (heuristic)'; Available = [bool]$cap.HasPurviewAuditPremium; Details = 'Shown when premium audit/compliance coverage is detected' }
         )
 
-        Show-M365ReportData -InputObject $rows -Title 'Tenant Feature Availability'
+        $featureTitle = 'Tenant Feature Availability'
+        $skuTitle = 'Detected Tenant SKUs (Sorted + Friendly Names)'
+        $servicePlanTitle = 'Detected Tenant SKU Service Plans (Sorted + Friendly Names)'
 
-        if ($cap.SkuPartNumbers -and @($cap.SkuPartNumbers).Count -gt 0) {
+        Show-M365ReportData -InputObject $rows -Title $featureTitle -ForcePopout
+
+        $skuRows = @()
+        $servicePlanRows = @()
+
+        if ($cap.SkuCatalog -and @($cap.SkuCatalog).Count -gt 0) {
+            $skuRows = @(
+                $cap.SkuCatalog |
+                    Select-Object SkuFriendlyName, SkuPartNumber, SkuId
+            )
+            Show-M365ReportData -InputObject $skuRows -Title $skuTitle -ForcePopout
+        }
+        elseif ($cap.SkuPartNumbers -and @($cap.SkuPartNumbers).Count -gt 0) {
             $skuRows = @($cap.SkuPartNumbers | ForEach-Object { [pscustomobject]@{ SkuPartNumber = $_ } })
-            Show-M365ReportData -InputObject $skuRows -Title 'Detected Tenant SKU Part Numbers'
+            Show-M365ReportData -InputObject $skuRows -Title 'Detected Tenant SKU Part Numbers' -ForcePopout
+        }
+
+        if ($cap.SkuServicePlans -and @($cap.SkuServicePlans).Count -gt 0) {
+            $servicePlanRows = @(
+                $cap.SkuServicePlans |
+                    Select-Object SkuFriendlyName, SkuPartNumber, ServicePlanFriendlyName, ServicePlanName, ServicePlanId, ProvisioningStatus
+            )
+            Show-M365ReportData -InputObject $servicePlanRows -Title $servicePlanTitle -ForcePopout
+        }
+
+        if (Read-M365YesNo -Prompt 'Export feature availability data bundle to configured save path now?' -Default $true) {
+            Export-M365FeatureAvailabilityBundle -FeatureRows $rows -SkuRows $skuRows -ServicePlanRows $servicePlanRows
         }
     }
 
@@ -225,13 +409,7 @@ function Show-M365ExchangeMenu {
                         Connect-M365ExchangeTools
                     }
                     '2' {
-                        $upn = Read-Host 'Optional UPN for Connect-ExchangeOnline (press Enter to use default sign-in)'
-                        if ([string]::IsNullOrWhiteSpace($upn)) {
-                            Connect-M365ExchangePowerShell
-                        }
-                        else {
-                            Connect-M365ExchangePowerShell -UserPrincipalName $upn
-                        }
+                        Connect-M365ExchangePowerShell
                     }
                     '3' {
                         $reportData = Get-M365MailboxInventory
@@ -452,6 +630,16 @@ function Show-M365ExchangeMenu {
             Write-Host '6. Set logo path'
             Write-Host '7. Clear logo path'
             Write-Host '8. Preview logo'
+            Write-Host "9. Report save path: $(if ([string]::IsNullOrWhiteSpace($settings.ReportSavePath)) { '[Default: Documents\\M365-Exchange-Exports]' } else { $settings.ReportSavePath })"
+            Write-Host '10. Set report save path'
+            Write-Host "11. File name template: $($settings.FileNameTemplate)"
+            Write-Host '12. Set file name template'
+            Write-Host "13. HTML branding enabled: $($settings.HtmlBrandingEnabled)"
+            Write-Host '14. Toggle HTML branding'
+            Write-Host "15. Show company name in HTML: $($settings.HtmlShowCompanyName)"
+            Write-Host '16. Toggle company name in HTML'
+            Write-Host "17. Show company logo in HTML: $($settings.HtmlShowCompanyLogo)"
+            Write-Host '18. Toggle company logo in HTML'
             Write-Host 'B. Back'
 
             $selection = Read-Host 'Select an option'
@@ -548,6 +736,60 @@ function Show-M365ExchangeMenu {
                         Start-Process -FilePath $settings.LogoPath
                         Write-Host 'Opened logo preview.' -ForegroundColor Green
                     }
+                }
+                '9' {
+                    Write-Host "Report save path is currently: $(if ([string]::IsNullOrWhiteSpace($settings.ReportSavePath)) { '[Default: Documents\\M365-Exchange-Exports]' } else { $settings.ReportSavePath })" -ForegroundColor Green
+                }
+                '10' {
+                    $savePathInput = Read-Host 'Enter report save path (leave blank to use default in Documents)'
+                    if ([string]::IsNullOrWhiteSpace($savePathInput)) {
+                        Set-M365UiSettings -ReportSavePath '' | Out-Null
+                        Write-Host 'Report save path reset to default.' -ForegroundColor Green
+                    }
+                    else {
+                        $resolvedSavePath = [System.IO.Path]::GetFullPath($savePathInput)
+                        Set-M365UiSettings -ReportSavePath $resolvedSavePath | Out-Null
+                        Write-Host "Report save path saved: $resolvedSavePath" -ForegroundColor Green
+                    }
+                }
+                '11' {
+                    Write-Host "File name template is currently: $($settings.FileNameTemplate)" -ForegroundColor Green
+                    Write-Host 'Supported tokens: {Title} {Timestamp} {Date} {Time} {CompanyName}' -ForegroundColor DarkCyan
+                }
+                '12' {
+                    $templateInput = Read-Host 'Enter file name template (tokens: {Title} {Timestamp} {Date} {Time} {CompanyName})'
+                    if ([string]::IsNullOrWhiteSpace($templateInput)) {
+                        Set-M365UiSettings -FileNameTemplate '{Title}-{Timestamp}' | Out-Null
+                        Write-Host 'File name template reset to default.' -ForegroundColor Green
+                    }
+                    else {
+                        Set-M365UiSettings -FileNameTemplate $templateInput | Out-Null
+                        Write-Host "File name template saved: $templateInput" -ForegroundColor Green
+                    }
+                }
+                '13' {
+                    Write-Host "HTML branding enabled is currently: $($settings.HtmlBrandingEnabled)" -ForegroundColor Green
+                }
+                '14' {
+                    $newValue = -not [bool]$settings.HtmlBrandingEnabled
+                    Set-M365UiSettings -HtmlBrandingEnabled $newValue | Out-Null
+                    Write-Host "HTML branding enabled set to: $newValue" -ForegroundColor Green
+                }
+                '15' {
+                    Write-Host "Show company name in HTML is currently: $($settings.HtmlShowCompanyName)" -ForegroundColor Green
+                }
+                '16' {
+                    $newValue = -not [bool]$settings.HtmlShowCompanyName
+                    Set-M365UiSettings -HtmlShowCompanyName $newValue | Out-Null
+                    Write-Host "Show company name in HTML set to: $newValue" -ForegroundColor Green
+                }
+                '17' {
+                    Write-Host "Show company logo in HTML is currently: $($settings.HtmlShowCompanyLogo)" -ForegroundColor Green
+                }
+                '18' {
+                    $newValue = -not [bool]$settings.HtmlShowCompanyLogo
+                    Set-M365UiSettings -HtmlShowCompanyLogo $newValue | Out-Null
+                    Write-Host "Show company logo in HTML set to: $newValue" -ForegroundColor Green
                 }
                 'B' {
                     return

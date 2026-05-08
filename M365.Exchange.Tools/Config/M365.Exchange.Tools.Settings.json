@@ -1,5 +1,10 @@
 {
-  "CompanyName": "Cloud 10 IT",
+  "FileNameTemplate": "{Title}-{Timestamp}",
+  "HtmlShowCompanyLogo": true,
+  "HtmlShowCompanyName": true,
+  "LogoPath": "C:\\Users\\StevenHughes\\OneDrive - Cloud10IT\\Pictures\\Cloud-10-Logomark-final.png",
   "BrowserPopout": "None",
-  "LogoPath": "C:\\Users\\StevenHughes\\OneDrive - Cloud10IT\\Pictures\\Cloud-10-Logomark-final.png"
+  "HtmlBrandingEnabled": true,
+  "ReportSavePath": "",
+  "CompanyName": "Cloud 10 IT"
 }

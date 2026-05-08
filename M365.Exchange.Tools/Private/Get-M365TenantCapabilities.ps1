@@ -2,6 +2,32 @@ function Get-M365TenantCapabilities {
     [CmdletBinding()]
     param()
 
+    function ConvertTo-M365FriendlyLabel {
+        [CmdletBinding()]
+        param(
+            [Parameter()]
+            [string]$Value
+        )
+
+        if ([string]::IsNullOrWhiteSpace($Value)) {
+            return ''
+        }
+
+        $friendly = $Value -replace '[_\-]+', ' '
+        $friendly = ($friendly -replace '\s+', ' ').Trim()
+        $friendly = (Get-Culture).TextInfo.ToTitleCase($friendly.ToLowerInvariant())
+
+        # Restore common product acronyms after title-casing.
+        $friendly = $friendly -replace '\bM365\b', 'M365'
+        $friendly = $friendly -replace '\bO365\b', 'O365'
+        $friendly = $friendly -replace '\bId\b', 'ID'
+        $friendly = $friendly -replace '\bE[135]\b', { param($m) $m.Value.ToUpperInvariant() }
+        $friendly = $friendly -replace '\bF[13]\b', { param($m) $m.Value.ToUpperInvariant() }
+        $friendly = $friendly -replace '\bP[125]\b', { param($m) $m.Value.ToUpperInvariant() }
+
+        return $friendly
+    }
+
     $isGraphConnected = Test-ExchangeOnlineConnection
     $isExchangeConnected = Test-M365ExchangePowerShellConnection
 
@@ -11,6 +37,8 @@ function Get-M365TenantCapabilities {
 
     $licenseStatus = 'Unknown'
     $skuPartNumbers = @()
+    $skuCatalog = @()
+    $skuServicePlans = @()
     $hasExchangePlan2OrBetter = $false
     $hasPurviewAuditPremium = $false
 
@@ -19,7 +47,48 @@ function Get-M365TenantCapabilities {
         if ($getSubscribedSkuCmd) {
             try {
                 $skus = @(Get-MgSubscribedSku -All -ErrorAction Stop)
-                $skuPartNumbers = @($skus | ForEach-Object { [string]$_.SkuPartNumber } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+
+                $skuCatalog = @(
+                    $skus |
+                        ForEach-Object {
+                            $skuPartNumber = [string]$_.SkuPartNumber
+                            if ([string]::IsNullOrWhiteSpace($skuPartNumber)) {
+                                continue
+                            }
+
+                            [pscustomobject]@{
+                                SkuFriendlyName = ConvertTo-M365FriendlyLabel -Value $skuPartNumber
+                                SkuPartNumber   = $skuPartNumber
+                                SkuId           = [string]$_.SkuId
+                            }
+                        } |
+                        Sort-Object SkuFriendlyName, SkuPartNumber -Unique
+                )
+
+                $skuPartNumbers = @($skuCatalog | ForEach-Object { $_.SkuPartNumber })
+
+                $skuServicePlans = @(
+                    $skus |
+                        ForEach-Object {
+                            $skuPartNumber = [string]$_.SkuPartNumber
+                            foreach ($servicePlan in @($_.ServicePlans)) {
+                                $servicePlanId = [string]$servicePlan.ServicePlanId
+                                if ([string]::IsNullOrWhiteSpace($servicePlanId)) {
+                                    continue
+                                }
+
+                                [pscustomobject]@{
+                                    SkuFriendlyName    = ConvertTo-M365FriendlyLabel -Value $skuPartNumber
+                                    SkuPartNumber      = $skuPartNumber
+                                    ServicePlanFriendlyName = ConvertTo-M365FriendlyLabel -Value ([string]$servicePlan.ServicePlanName)
+                                    ServicePlanName    = [string]$servicePlan.ServicePlanName
+                                    ServicePlanId      = $servicePlanId
+                                    ProvisioningStatus = [string]$servicePlan.ProvisioningStatus
+                                }
+                            }
+                        } |
+                        Sort-Object SkuFriendlyName, SkuPartNumber, ServicePlanFriendlyName, ServicePlanName, ServicePlanId, ProvisioningStatus -Unique
+                )
 
                 $plan2Indicators = @(
                     'ENTERPRISEPACK',            # Office 365 E3
@@ -64,6 +133,8 @@ function Get-M365TenantCapabilities {
         IsExchangeConnected         = $isExchangeConnected
         LicenseStatus               = $licenseStatus
         SkuPartNumbers              = $skuPartNumbers
+        SkuCatalog                  = $skuCatalog
+        SkuServicePlans             = $skuServicePlans
         HasExchangePlan2OrBetter    = $hasExchangePlan2OrBetter
         HasPurviewAuditPremium      = $hasPurviewAuditPremium
         HasSearchUnifiedAuditLog    = $hasSearchUnifiedAuditLog

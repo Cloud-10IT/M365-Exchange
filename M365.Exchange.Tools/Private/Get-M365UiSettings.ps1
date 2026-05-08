@@ -3,9 +3,14 @@ function Get-M365UiSettings {
     $settingsPath = Join-Path -Path $moduleRoot -ChildPath 'Config\M365.Exchange.Tools.Settings.json'
 
     $defaultSettings = @{
-        BrowserPopout = 'Edge'
-        CompanyName   = ''
-        LogoPath      = ''
+        BrowserPopout        = 'Edge'
+        CompanyName          = ''
+        LogoPath             = ''
+        ReportSavePath       = ''
+        FileNameTemplate     = '{Title}-{Timestamp}'
+        HtmlBrandingEnabled  = $true
+        HtmlShowCompanyName  = $true
+        HtmlShowCompanyLogo  = $true
     }
 
     if (-not (Test-Path -Path $settingsPath)) {
@@ -36,8 +41,13 @@ function Get-M365UiSettings {
     }
 
     return @{
-        BrowserPopout = $browserPopout
-        CompanyName   = [string]$settings.CompanyName
-        LogoPath      = [string]$settings.LogoPath
+        BrowserPopout       = $browserPopout
+        CompanyName         = [string]$settings.CompanyName
+        LogoPath            = [string]$settings.LogoPath
+        ReportSavePath      = [string]$settings.ReportSavePath
+        FileNameTemplate    = if ([string]::IsNullOrWhiteSpace([string]$settings.FileNameTemplate)) { '{Title}-{Timestamp}' } else { [string]$settings.FileNameTemplate }
+        HtmlBrandingEnabled = if ($null -eq $settings.HtmlBrandingEnabled) { $true } else { [bool]$settings.HtmlBrandingEnabled }
+        HtmlShowCompanyName = if ($null -eq $settings.HtmlShowCompanyName) { $true } else { [bool]$settings.HtmlShowCompanyName }
+        HtmlShowCompanyLogo = if ($null -eq $settings.HtmlShowCompanyLogo) { $true } else { [bool]$settings.HtmlShowCompanyLogo }
     }
 }

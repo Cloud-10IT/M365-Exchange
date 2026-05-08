@@ -13,13 +13,22 @@ function Show-M365ReportData {
         [string]$ChartColumn,
 
         [Parameter()]
-        [string]$ExpandColumn
+        [string]$ExpandColumn,
+
+        [Parameter()]
+        [switch]$ForcePopout,
+
+        [Parameter()]
+        [switch]$NoOpenBrowser,
+
+        [Parameter()]
+        [switch]$PassThru
     )
 
     $data = if ($null -eq $InputObject) { @() } else { @($InputObject) }
     $settings = Get-M365UiSettings
 
-    if ($settings.BrowserPopout -eq 'None') {
+    if (($settings.BrowserPopout -eq 'None') -and (-not $ForcePopout)) {
         $data | Format-Table -AutoSize | Out-Host
         return
     }
@@ -36,10 +45,15 @@ function Show-M365ReportData {
     $safeExpandColumn = if ([string]::IsNullOrWhiteSpace($ExpandColumn)) { '' } else { [System.Text.RegularExpressions.Regex]::Replace($ExpandColumn, '[^A-Za-z0-9_]', '') }
     $companyName = [string]$settings.CompanyName
     $logoPath = [string]$settings.LogoPath
+    $htmlBrandingEnabled = [bool]$settings.HtmlBrandingEnabled
+    $htmlShowCompanyName = [bool]$settings.HtmlShowCompanyName
+    $htmlShowCompanyLogo = [bool]$settings.HtmlShowCompanyLogo
+    $configuredSavePath = [string]$settings.ReportSavePath
+    $configuredTemplate = [string]$settings.FileNameTemplate
 
-    $safeCompanyName = if ([string]::IsNullOrWhiteSpace($companyName)) { '' } else { [System.Net.WebUtility]::HtmlEncode($companyName) }
+    $safeCompanyName = if (($htmlBrandingEnabled -and $htmlShowCompanyName) -and -not [string]::IsNullOrWhiteSpace($companyName)) { [System.Net.WebUtility]::HtmlEncode($companyName) } else { '' }
     $logoUri = ''
-    if (-not [string]::IsNullOrWhiteSpace($logoPath) -and (Test-Path -Path $logoPath)) {
+    if (($htmlBrandingEnabled -and $htmlShowCompanyLogo) -and -not [string]::IsNullOrWhiteSpace($logoPath) -and (Test-Path -Path $logoPath)) {
       try {
         $resolvedLogoPath = Resolve-Path -Path $logoPath -ErrorAction Stop | Select-Object -ExpandProperty Path -First 1
         $logoUri = ([System.Uri]$resolvedLogoPath).AbsoluteUri
@@ -50,22 +64,40 @@ function Show-M365ReportData {
     }
 
     $brandBlock = ''
-    if (-not [string]::IsNullOrWhiteSpace($safeCompanyName) -or -not [string]::IsNullOrWhiteSpace($logoUri)) {
+    if ($htmlBrandingEnabled -and (-not [string]::IsNullOrWhiteSpace($safeCompanyName) -or -not [string]::IsNullOrWhiteSpace($logoUri))) {
       $brandLogoHtml = if ([string]::IsNullOrWhiteSpace($logoUri)) { '' } else { '<img class="brand-logo" src="' + [System.Net.WebUtility]::HtmlEncode($logoUri) + '" alt="Company logo">' }
       $brandNameHtml = if ([string]::IsNullOrWhiteSpace($safeCompanyName)) { '' } else { '<span class="brand-name">' + $safeCompanyName + '</span>' }
       $brandBlock = '<div class="brand">' + $brandLogoHtml + $brandNameHtml + '</div>'
     }
 
     $timeStamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $reportDirectory = Join-Path -Path $env:TEMP -ChildPath 'M365-Exchange-Reports'
+    $titleToken = ($Title -replace '[^A-Za-z0-9\-_ ]', '' -replace ' +', '-').Trim('-')
+    if ([string]::IsNullOrWhiteSpace($titleToken)) {
+      $titleToken = 'M365-Report'
+    }
+
+    $template = if ([string]::IsNullOrWhiteSpace($configuredTemplate)) { '{Title}-{Timestamp}' } else { $configuredTemplate }
+    $dateToken = Get-Date -Format 'yyyyMMdd'
+    $timeToken = Get-Date -Format 'HHmmss'
+    $companyToken = if ([string]::IsNullOrWhiteSpace($companyName)) { '' } else { ($companyName -replace '[^A-Za-z0-9\-_ ]', '' -replace ' +', '-').Trim('-') }
+
+    $fileStem = $template
+    $fileStem = $fileStem.Replace('{Title}', $titleToken)
+    $fileStem = $fileStem.Replace('{Timestamp}', $timeStamp)
+    $fileStem = $fileStem.Replace('{Date}', $dateToken)
+    $fileStem = $fileStem.Replace('{Time}', $timeToken)
+    $fileStem = $fileStem.Replace('{CompanyName}', $companyToken)
+    $fileStem = ($fileStem -replace '[^A-Za-z0-9\-_ ]', '' -replace ' +', '-').Trim('-')
+    if ([string]::IsNullOrWhiteSpace($fileStem)) {
+      $fileStem = "M365-Report-$timeStamp"
+    }
+
+    $reportDirectory = if (-not [string]::IsNullOrWhiteSpace($configuredSavePath)) { $configuredSavePath } else { Join-Path -Path $env:TEMP -ChildPath 'M365-Exchange-Reports' }
     if (-not (Test-Path -Path $reportDirectory)) {
         New-Item -Path $reportDirectory -ItemType Directory -Force | Out-Null
     }
 
-    $fileName = ('{0}-{1}.html' -f ($Title -replace '[^A-Za-z0-9\-_ ]', '' -replace ' +', '-').Trim('-'), $timeStamp)
-    if ([string]::IsNullOrWhiteSpace($fileName) -or $fileName.StartsWith('-')) {
-        $fileName = "M365-Report-$timeStamp.html"
-    }
+    $fileName = "$fileStem.html"
 
     $reportPath = Join-Path -Path $reportDirectory -ChildPath $fileName
 
@@ -142,6 +174,10 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--
 .srch input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(15,118,110,.12);background:#fff}
 .srch-clr{position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--t4);font-size:13px;line-height:1;padding:2px;display:none}
 .srch-clr:hover{color:var(--t2)}
+.flt-sel{min-width:170px;padding:6px 9px;border:1px solid var(--bd2);border-radius:8px;font-size:12px;background:var(--surf2);color:var(--t1);outline:none;font-family:inherit}
+.flt-sel:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(15,118,110,.12);background:#fff}
+.flt-input{min-width:190px;max-width:260px;padding:6px 9px;border:1px solid var(--bd2);border-radius:8px;font-size:12px;background:var(--surf2);color:var(--t1);outline:none;font-family:inherit}
+.flt-input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(15,118,110,.12);background:#fff}
 
 /* chart */
 .chart-card{background:var(--surf);border:1px solid var(--bd);border-radius:var(--r);padding:14px 16px;box-shadow:var(--sh);display:none;flex-shrink:0}
@@ -170,7 +206,7 @@ tbody tr{border-bottom:1px solid var(--bd);transition:background .08s}
 tbody tr:last-child{border-bottom:none}
 tbody tr:nth-child(even){background:#fafcff}
 tbody tr:hover{background:#f0fdfa}
-td{padding:7px 11px;font-size:12px;color:var(--t2);white-space:nowrap;max-width:300px;overflow:hidden;text-overflow:ellipsis;border-right:1px solid transparent}
+td{padding:7px 11px;font-size:12px;color:var(--t2);white-space:normal;max-width:none;overflow:visible;text-overflow:clip;border-right:1px solid transparent;word-break:break-word}
 td:last-child{border-right:none}
 td.null{color:var(--t4)}
 
@@ -201,6 +237,14 @@ td.null{color:var(--t4)}
 .hc-row:last-child{border-bottom:none}
 .hc-key{min-width:90px;max-width:110px;color:var(--t4);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;flex-shrink:0;padding-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hc-val{color:var(--t2);font-size:11px;word-break:break-word;flex:1;line-height:1.4}
+
+@media print{
+  .topbar,.actions,.fbar,.chart-card,.ftr{display:none !important}
+  body{background:#fff}
+  .page{padding:0}
+  .tbl-wrap{border:none;box-shadow:none}
+  thead th{position:static}
+}
 </style>
 </head>
 <body>
@@ -221,6 +265,10 @@ td.null{color:var(--t4)}
       <button class="btn btn-primary" id="exportBtn" type="button">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8m0 0-2.5-2.5M8 10l2.5-2.5M3 13h10"/></svg>
         Export CSV
+      </button>
+      <button class="btn btn-ghost" id="pdfBtn" type="button">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.5h5l3 3V13.5H4z"/><path d="M9 2.5v3h3"/><path d="M5.5 11h5"/></svg>
+        Export PDF
       </button>
     </div>
   </div>
@@ -243,6 +291,10 @@ td.null{color:var(--t4)}
       <button class="pill"    data-a="enabled"  type="button">✓ Enabled</button>
       <button class="pill"    data-a="disabled" type="button">✗ Disabled</button>
     </div>
+    <div class="fdivider"></div>
+    <span class="flabel">Filter</span>
+    <select id="fltCol" class="flt-sel"></select>
+    <input id="fltVal" class="flt-input" type="text" placeholder="Column contains..." autocomplete="off" spellcheck="false">
     <div class="fdivider"></div>
     <div class="srch">
       <svg class="srch-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="6.5" cy="6.5" r="4"/><path d="m10.5 10.5 3 3"/></svg>
@@ -284,11 +336,53 @@ const empty  = document.getElementById('emptyState');
 const ftrCnt = document.getElementById('ftrCount');
 const srch   = document.getElementById('srchInput');
 const srchClr= document.getElementById('srchClr');
+const fltCol = document.getElementById('fltCol');
+const fltVal = document.getElementById('fltVal');
 
 let activeRows = [...rows];
 let sortState  = { col: null, dir: 'asc' };
 let profile    = 'all';
 let acctFilter = 'all';
+let columnFilter = { col: '__all__', term: '' };
+
+const hasProfileColumns = rows.some(r => ('UserType' in r) || ('MailboxKind' in r) || ('RecipientTypeDetails' in r) || ('OnPremisesSyncEnabled' in r));
+const hasAccountColumn = rows.some(r => ('AccountEnabled' in r));
+
+if (!hasProfileColumns) {
+  const profileLabel = Array.from(document.querySelectorAll('.fbar .flabel')).find(x => (x.textContent || '').trim().toLowerCase() === 'view');
+  const profilePills = document.getElementById('pills');
+  if (profileLabel) { profileLabel.style.display = 'none'; }
+  if (profilePills) { profilePills.style.display = 'none'; }
+}
+
+if (!hasAccountColumn) {
+  const accountLabel = Array.from(document.querySelectorAll('.fbar .flabel')).find(x => (x.textContent || '').trim().toLowerCase() === 'account');
+  const accountPills = document.getElementById('acctPills');
+  if (accountLabel) { accountLabel.style.display = 'none'; }
+  if (accountPills) { accountPills.style.display = 'none'; }
+}
+
+Array.from(document.querySelectorAll('.fbar .fdivider')).forEach(function(div){
+  const prev = div.previousElementSibling;
+  const next = div.nextElementSibling;
+  const prevHidden = !prev || getComputedStyle(prev).display === 'none';
+  const nextHidden = !next || getComputedStyle(next).display === 'none';
+  if (prevHidden || nextHidden) {
+    div.style.display = 'none';
+  }
+});
+
+(function(){
+  const colSet = new Set();
+  rows.forEach(function(r){ Object.keys(r || {}).forEach(function(k){ colSet.add(k); }); });
+  const cols = Array.from(colSet).sort(function(a,b){ return a.localeCompare(b, undefined, { sensitivity: 'base' }); });
+  const escapedCols = cols.map(function(c){
+    return c.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  });
+  fltCol.innerHTML = '<option value="__all__">All columns</option>' + escapedCols.map(function(c){
+    return '<option value="'+c+'">'+c+'</option>';
+  }).join('');
+})();
 
 // timestamp
 document.getElementById('tbTime').textContent = 'Generated ' + new Date().toLocaleString();
@@ -450,9 +544,10 @@ function renderCell(col, val, row) {
     td.style.fontVariantNumeric='tabular-nums'; return td;
   }
 
-  // truncate long text
-  if (raw.length>60) { td.textContent=raw.substring(0,57)+'\u2026'; td.title=raw; }
-  else td.textContent=raw;
+  td.textContent=raw;
+  if (raw.length>70) {
+    td.title=raw;
+  }
   return td;
 }
 
@@ -522,6 +617,14 @@ function matchSearch(row, term) {
   return Object.values(row).some(v=>toStr(v).toLowerCase().includes(term));
 }
 
+function matchColumnFilter(row) {
+  if (!columnFilter.term) return true;
+  if (columnFilter.col === '__all__') {
+    return Object.values(row).some(v=>toStr(v).toLowerCase().includes(columnFilter.term));
+  }
+  return toStr(row[columnFilter.col]).toLowerCase().includes(columnFilter.term);
+}
+
 // build table
 function buildTable(src) {
   tbl.innerHTML='';
@@ -587,8 +690,10 @@ function buildChart(src) {
 // apply
 function applyFilters() {
   const term=(srch.value||'').trim().toLowerCase();
+  columnFilter.col = fltCol.value || '__all__';
+  columnFilter.term = (fltVal.value || '').trim().toLowerCase();
   srchClr.style.display=term?'block':'none';
-  activeRows=rows.filter(r=>matchProfile(r)&&matchAccount(r)&&matchSearch(r,term));
+  activeRows=rows.filter(r=>matchProfile(r)&&matchAccount(r)&&matchColumnFilter(r)&&matchSearch(r,term));
   activeRows=expandRows(activeRows);
   buildTable(sortRows(activeRows));
   buildChart(activeRows);
@@ -612,6 +717,9 @@ document.getElementById('pills').addEventListener('click',function(e){
 srch.addEventListener('input', applyFilters);
 srch.addEventListener('keydown',e=>{ if(e.key==='Escape'){srch.value='';applyFilters();} });
 srchClr.addEventListener('click',()=>{ srch.value=''; srchClr.style.display='none'; applyFilters(); });
+fltCol.addEventListener('change', applyFilters);
+fltVal.addEventListener('input', applyFilters);
+fltVal.addEventListener('keydown',e=>{ if(e.key==='Escape'){fltVal.value='';applyFilters();} });
 
 // export
 document.getElementById('exportBtn').addEventListener('click',function(){
@@ -623,6 +731,10 @@ document.getElementById('exportBtn').addEventListener('click',function(){
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
   a.download=title.replace(/\s+/g,'-')+'.csv';
   document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(a.href);
+});
+
+document.getElementById('pdfBtn').addEventListener('click', function(){
+  window.print();
 });
 
 applyFilters();
@@ -644,7 +756,23 @@ applyFilters();
     $fileUri = ([System.Uri]$reportPath).AbsoluteUri
     $browserLaunched = $false
 
-    switch ($settings.BrowserPopout) {
+    if ($NoOpenBrowser) {
+      Write-Host "Generated report HTML: $reportPath" -ForegroundColor Green
+      if ($PassThru) {
+        return [pscustomobject]@{
+          ReportPath = $reportPath
+          ReportUri  = $fileUri
+          Title      = $Title
+          RowCount   = @($data).Count
+        }
+      }
+
+      return
+    }
+
+    $selectedBrowser = if (($settings.BrowserPopout -eq 'None') -and $ForcePopout) { 'Default' } else { $settings.BrowserPopout }
+
+    switch ($selectedBrowser) {
         'Edge' {
             $edgeCommand = Get-Command -Name msedge.exe -ErrorAction SilentlyContinue
             if ($edgeCommand) {
@@ -711,10 +839,19 @@ applyFilters();
         }
     }
 
-    if (-not $browserLaunched -and $settings.BrowserPopout -ne 'None') {
+    if (-not $browserLaunched -and ($selectedBrowser -ne 'None')) {
         # Fallback to default browser if selected browser not found
         Start-Process -FilePath $reportPath
     }
 
     Write-Host "Opened report popout: $reportPath" -ForegroundColor Green
+
+    if ($PassThru) {
+      return [pscustomobject]@{
+        ReportPath = $reportPath
+        ReportUri  = $fileUri
+        Title      = $Title
+        RowCount   = @($data).Count
+      }
+    }
 }
