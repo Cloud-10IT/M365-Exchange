@@ -304,6 +304,13 @@ td.null{color:var(--t4)}
       <button class="pill"    data-a="disabled" type="button">✗ Disabled</button>
     </div>
     <div class="fdivider"></div>
+    <span class="flabel">Password</span>
+    <div class="pills" id="pwdPills">
+      <button class="pill on" data-pw="all"            type="button">All</button>
+      <button class="pill"    data-pw="never-expires"  type="button">Never Expires</button>
+      <button class="pill"    data-pw="has-expiry"     type="button">Has Expiry</button>
+    </div>
+    <div class="fdivider"></div>
     <span class="flabel">Filter</span>
     <select id="fltCol" class="flt-sel"></select>
     <input id="fltVal" class="flt-input" type="text" placeholder="Column contains..." autocomplete="off" spellcheck="false">
@@ -355,6 +362,7 @@ let activeRows = [...rows];
 let sortState  = { col: null, dir: 'asc' };
 let profile    = 'all';
 let acctFilter = 'all';
+let pwdFilter  = 'all';
 let columnFilter = { col: '__all__', term: '' };
 
 const hasProfileColumns = rows.some(r => ('UserType' in r) || ('MailboxKind' in r) || ('RecipientTypeDetails' in r) || ('OnPremisesSyncEnabled' in r));
@@ -372,6 +380,14 @@ if (!hasAccountColumn) {
   const accountPills = document.getElementById('acctPills');
   if (accountLabel) { accountLabel.style.display = 'none'; }
   if (accountPills) { accountPills.style.display = 'none'; }
+}
+
+const hasPwdColumn = rows.some(r => ('PasswordNeverExpires' in r));
+if (!hasPwdColumn) {
+  const pwdLabel = Array.from(document.querySelectorAll('.fbar .flabel')).find(x => (x.textContent || '').trim().toLowerCase() === 'password');
+  const pwdPills = document.getElementById('pwdPills');
+  if (pwdLabel) { pwdLabel.style.display = 'none'; }
+  if (pwdPills) { pwdPills.style.display = 'none'; }
 }
 
 Array.from(document.querySelectorAll('.fbar .fdivider')).forEach(function(div){
@@ -624,6 +640,15 @@ function matchAccount(row) {
   return true;
 }
 
+function matchPwdFilter(row) {
+  if (pwdFilter==='all') return true;
+  if (!Object.prototype.hasOwnProperty.call(row,'PasswordNeverExpires')) return true;
+  const ne=normBool(row.PasswordNeverExpires);
+  if (pwdFilter==='never-expires') return ne;
+  if (pwdFilter==='has-expiry')    return !ne;
+  return true;
+}
+
 function matchSearch(row, term) {
   if (!term) return true;
   return Object.values(row).some(v=>toStr(v).toLowerCase().includes(term));
@@ -705,11 +730,18 @@ function applyFilters() {
   columnFilter.col = fltCol.value || '__all__';
   columnFilter.term = (fltVal.value || '').trim().toLowerCase();
   srchClr.style.display=term?'block':'none';
-  activeRows=rows.filter(r=>matchProfile(r)&&matchAccount(r)&&matchColumnFilter(r)&&matchSearch(r,term));
+  activeRows=rows.filter(r=>matchProfile(r)&&matchAccount(r)&&matchPwdFilter(r)&&matchColumnFilter(r)&&matchSearch(r,term));
   activeRows=expandRows(activeRows);
   buildTable(sortRows(activeRows));
   buildChart(activeRows);
 }
+
+// password pills
+document.getElementById('pwdPills').addEventListener('click',function(e){
+  const btn=e.target.closest('.pill'); if(!btn) return;
+  document.querySelectorAll('#pwdPills .pill').forEach(p=>p.classList.remove('on'));
+  btn.classList.add('on'); pwdFilter=btn.dataset.pw; applyFilters();
+});
 
 // account pills
 document.getElementById('acctPills').addEventListener('click',function(e){

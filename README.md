@@ -63,14 +63,15 @@ Get-M365EntraDuplicateGroupUsageReport
 - Main menu option `5. Feature availability` always opens a modern HTML popout with search, column filter, and export actions (CSV and PDF).
 - Option `5. Feature availability` can also export a full bundle to the configured save path (CSV + generated PDF files) without browser save dialogs.
 - Duplicate-group usage report can optionally include Azure RBAC evidence when Az.Resources is available and you are connected with `Connect-AzAccount`.
-- Configuration menu includes browser selection for report windows: Edge, Firefox, Chrome, Brave, Default (system browser), or None (console table only).
-- Configuration menu also lets you set Company Name and a logo path used in popout report headers.
-- Configuration menu includes report save path and file name template settings for generated files.
+- Main menu option `4. Configuration` opens a native Windows settings form directly.
+- Configuration form includes browser selection for report windows: Edge, Firefox, Chrome, Brave, Default (system browser), or None (console table only).
+- Configuration form also lets you set Company Name and a logo path used in popout report headers.
+- Configuration form includes report save path and file name template settings for generated files.
 - File name template supports tokens: `{Title}`, `{Timestamp}`, `{Date}`, `{Time}`, `{CompanyName}`.
-- Configuration menu includes HTML branding toggles: enable/disable branding, show/hide company name, and show/hide logo.
-- Configuration menu includes a native Windows settings form to edit Company Name, Logo, Save Path, File Name Template, theme colors (Primary/Secondary), and report font family (for example, `Verdana`).
+- Configuration form includes HTML branding toggles: enable/disable branding, show/hide company name, and show/hide logo.
+- Configuration form includes Company Name, Logo, Save Path, File Name Template, theme colors (Primary/Secondary), report font family (for example, `Verdana`), and preferred Exchange auth mode (`Auto`, `Interactive`, `DisableWAM`, `Device`).
 - Native Windows settings form includes a `Reset Defaults` button to restore recommended generic values quickly.
-- Configuration menu includes a logo preview option.
+- Configuration form includes a logo preview option.
 - Popout report view supports profile filters for Users, Shared Mailboxes, Guests, and On-Prem Synced users, plus text search.
 - Choosing `Q. Quit` now signs out of Microsoft Graph, Exchange Online PowerShell, and Az (if loaded), clears PowerShell command history for the session, and clears the host view.
 
@@ -92,10 +93,7 @@ git config core.hooksPath .githooks
 
 ## Configuration Guide
 
-Use `Configuration` from the main menu, then either:
-
-1. Use numbered options for quick changes.
-2. Use `22. Open native Windows settings form` for guided editing with examples.
+Use `Configuration` from the main menu to open the native Windows settings form.
 
 ### Configuration Fields and Examples
 
@@ -113,6 +111,8 @@ Example: `#0f766e`
 Example: `#1e293b`
 - `ReportFontFamily`: Font used in HTML report body.
 Example: `Verdana`
+- `ExchangeAuthMode`: Preferred Exchange Online sign-in mode.
+Example: `DisableWAM`
 - `HtmlBrandingEnabled`: Enables/disables report branding section.
 Example: `true`
 - `HtmlShowCompanyName`: Shows/hides company name in report header.
@@ -127,3 +127,187 @@ Example: `true`
 - `{Date}`: `yyyyMMdd`
 - `{Time}`: `HHmmss`
 - `{CompanyName}`: Sanitized company name token
+
+---
+
+## MSP Microsoft 365 Tenant Baseline Assessment
+
+### Purpose
+
+A practical, repeatable baseline data set for collecting meaningful insight from a customer Microsoft 365 tenant. Covers:
+
+- Security posture
+- Identity risk
+- Licensing efficiency
+- Collaboration sprawl
+- Operational and governance gaps
+
+> **Guiding principle:** Pull data that changes decisions.
+
+### Scope & Assumptions
+
+- Customer uses Microsoft 365 / Entra ID
+- PowerShell access is approved and admin read permissions are granted
+- Tools: Microsoft Graph PowerShell (identity, licensing, groups, devices) and Exchange Online PowerShell (mailboxes)
+
+### Authentication
+
+```powershell
+# Entra ID / Microsoft Graph
+Connect-MgGraph -Scopes "Directory.Read.All","User.Read.All","Group.Read.All","Policy.Read.All"
+
+# Exchange Online
+Connect-ExchangeOnline
+```
+
+Or use the built-in connect options from the main menu which request all required scopes in one step.
+
+---
+
+### 1. Identity & Access Overview
+
+**Why this matters:** Identifies dormant accounts, guest sprawl, and security exposure.
+
+```powershell
+Get-MgUser -All | Select DisplayName, UserPrincipalName, UserType, AccountEnabled, CreatedDateTime
+```
+
+Key signals:
+- Disabled but still-licensed users
+- Guest accounts older than expected
+- High account creation volume
+
+**Privileged Roles** — Global Admin sprawl is the #1 real-world tenant risk.
+
+```powershell
+Get-MgDirectoryRole | ForEach-Object {
+    Get-MgDirectoryRoleMember -DirectoryRoleId $_.Id |
+    Select @{n="Role"; e={$_.AdditionalProperties.displayName}}, DisplayName, UserPrincipalName
+}
+```
+
+Key signals:
+- Too many Global Administrators
+- No dedicated break-glass account
+- Privileged access assigned to regular users
+
+---
+
+### 2. Licensing & Cost Efficiency
+
+**Why this matters:** This is where MSPs often create immediate savings.
+
+```powershell
+# Tenant license summary
+Get-MgSubscribedSku | Select SkuPartNumber, ConsumedUnits, PrepaidUnits
+
+# Per-user license assignment
+Get-MgUser -All | ForEach-Object {
+    [PSCustomObject]@{
+        UserPrincipalName = $_.UserPrincipalName
+        LicenseCount      = ($_.AssignedLicenses | Measure-Object).Count
+    }
+}
+```
+
+Key signals:
+- Licenses assigned to disabled users
+- Over-licensed tenants
+- Inefficient license tier usage
+
+The **Feature Availability** report (option 5 in the main menu) cross-references the tenant's active service plans against a built-in feature catalog to show which M365 features are actually available in the tenant.
+
+---
+
+### 3. Mailboxes & Messaging Risk
+
+> **Important:** Use `Get-Mailbox` (Exchange Online PowerShell) for insight and audit work. `Get-EXOMailbox` is optimized for bulk operations but intentionally limits available properties.
+
+```powershell
+# Full mailbox inventory
+Get-Mailbox -ResultSize Unlimited | Select DisplayName, RecipientTypeDetails, PrimarySmtpAddress
+
+# Forwarding rules — critical security signal
+Get-Mailbox -ResultSize Unlimited |
+    Where-Object { $_.ForwardingSmtpAddress -or $_.ForwardingAddress } |
+    Select DisplayName, ForwardingSmtpAddress
+
+# Shared mailboxes
+Get-Mailbox -RecipientTypeDetails SharedMailbox | Select DisplayName, PrimarySmtpAddress
+```
+
+Key signals:
+- Silent data exfiltration via forwarding rules
+- Forgotten or orphaned shared mailboxes
+- Shared mailboxes being used as user accounts
+
+The **User Mailbox Inventory** report merges Exchange schema data with Entra ID identity fields (`AccountEnabled`, `UsageLocation`, `AssignedLicenseCount`, `PasswordLastSet`) and sign-in activity from Graph beta (`LastSignInDateTime`), which replaces the deprecated Exchange `LastLogonTime` field.
+
+---
+
+### 4. Groups & Collaboration Sprawl
+
+```powershell
+# All groups overview
+Get-MgGroup -All | Select DisplayName, GroupTypes, SecurityEnabled, MailEnabled, CreatedDateTime
+
+# M365 Unified groups only
+Get-MgGroup -All | Where-Object { $_.GroupTypes -contains "Unified" }
+```
+
+> **Note on Group Activity fields:**
+> - `LastActivityDate`, `LastEmailActivityDate`, `LastSharePointActivityDate`, and `LastTeamsActivityDate` only populate for **Microsoft 365 (Unified) groups**.
+> - They do **not** populate for Security Groups or Distribution Lists.
+> - Requires `Reports.Read.All` scope. The `ActivityDataStatus` column explains the result per row.
+
+The **Entra Group Inventory** report also includes:
+- `AppAssignmentCount` and `AssignedToApplications` — which Enterprise Applications the group is assigned to (via `/appRoleAssignments`)
+- `RenewedDateTime` — last renewal date, useful for identifying stale security groups
+- `MemberCount` populated even when full member list is not fetched (uses a lightweight `$count` call)
+
+Key signals:
+- Group sprawl with no clear ownership
+- Unused M365 Groups / Teams with no recent activity
+- Security groups with no app assignments and no members
+
+---
+
+### 5. Devices & Endpoint Hygiene
+
+```powershell
+Get-MgDevice -All |
+    Select DisplayName, OperatingSystem, AccountEnabled, ApproximateLastSignInDateTime
+```
+
+Key signals:
+- Stale devices not signing in
+- Azure-joined but unmanaged endpoints
+- Credential risk from shared machines
+
+---
+
+### 6. Security Configuration Signals
+
+```powershell
+# Conditional Access policies
+Get-MgConditionalAccessPolicy
+```
+
+Key questions:
+- Is MFA enforced for all users?
+- Is legacy authentication blocked?
+- Are administrator accounts protected with a dedicated CA policy?
+
+---
+
+### 7. Operational Risk Indicators
+
+Non-technical but critical checks that no script can fully automate:
+
+| Check | Risk if missing |
+|---|---|
+| Number of Global Admins | Sprawl increases blast radius of account compromise |
+| Documented break-glass account | Lockout risk during incident response |
+| Shared resources have clear owners | Orphaned resources accumulate silently |
+| License assignment is centralized | Ad-hoc assignment leads to cost waste and gaps |
+| Forwarding rules reviewed periodically | Silent exfiltration goes undetected |

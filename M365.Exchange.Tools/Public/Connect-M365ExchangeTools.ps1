@@ -20,6 +20,8 @@ function Connect-M365ExchangeTools {
         'User.Read.All',
         'Group.Read.All',
         'Directory.Read.All',
+        'Organization.Read.All',
+        'Policy.Read.All',
         'OrgContact.Read.All',
         'MailboxSettings.Read',
         'AuditLog.Read.All'

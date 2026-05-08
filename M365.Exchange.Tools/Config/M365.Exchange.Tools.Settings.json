@@ -9,5 +9,6 @@
   "CompanyName": "Contoso",
   "ThemePrimaryColor": "#0f766e",
   "ThemeSecondaryColor": "#1e293b",
-  "ReportFontFamily": "Segoe UI"
+  "ReportFontFamily": "Segoe UI",
+  "ExchangeAuthMode": "Auto"
 }

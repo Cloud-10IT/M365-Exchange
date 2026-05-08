@@ -191,16 +191,7 @@ function Show-M365ExchangeMenu {
 
         $cap = Get-M365TenantCapabilities
 
-        $rows = @(
-            [pscustomobject]@{ Feature = 'Microsoft Graph connected'; Available = [bool]$cap.IsGraphConnected; Details = 'Required for Entra and Graph-based Exchange reports' }
-            [pscustomobject]@{ Feature = 'Exchange PowerShell connected'; Available = [bool]$cap.IsExchangeConnected; Details = 'Required for Exchange PowerShell report features' }
-            [pscustomobject]@{ Feature = 'SKU/license discovery status'; Available = ($cap.LicenseStatus -eq 'Detected'); Details = $cap.LicenseStatus }
-            [pscustomobject]@{ Feature = 'Exchange Plan 2 or better (heuristic)'; Available = [bool]$cap.HasExchangePlan2OrBetter; Details = 'Used to estimate archive/audit-heavy feature coverage' }
-            [pscustomobject]@{ Feature = 'Purview Audit premium (heuristic)'; Available = [bool]$cap.HasPurviewAuditPremium; Details = 'Indicates likely premium audit retention/capabilities' }
-            [pscustomobject]@{ Feature = 'Advanced Entra duplicate analysis (heuristic)'; Available = [bool]$cap.HasPurviewAuditPremium; Details = 'Shown when premium audit/compliance coverage is detected' }
-        )
-
-        $featureTitle = 'Tenant Feature Availability'
+        $featureTitle = 'M365 Tenant Feature Capability Matrix'
         $skuTitle = 'Detected Tenant SKUs (Sorted + Friendly Names)'
         $servicePlanTitle = 'Detected Tenant SKU Service Plans (Sorted + Friendly Names)'
 
@@ -224,17 +215,36 @@ function Show-M365ExchangeMenu {
             )
         }
 
+        $matrixRows = @()
+        if (@($servicePlanRows).Count -gt 0) {
+            $matrixRows = @(Get-M365FeatureCapabilityMatrix -ServicePlans $cap.SkuServicePlans)
+        }
+
         do {
             Clear-Host
             Write-Host 'Feature Availability' -ForegroundColor Cyan
-            Write-Host "License discovery status: $($cap.LicenseStatus)" -ForegroundColor ($(if ($cap.LicenseStatus -eq 'Detected') { 'Green' } else { 'Yellow' }))
-            Write-Host "SKU rows: $(@($skuRows).Count)"
-            Write-Host "Service plan rows: $(@($servicePlanRows).Count)"
+            $statusColor = switch ($cap.LicenseStatus) {
+                'Detected'         { 'Green' }
+                'PartialData'      { 'Yellow' }
+                'NoneFound'        { 'Yellow' }
+                default            { 'Red' }
+            }
+            Write-Host "License discovery status: $($cap.LicenseStatus)" -ForegroundColor $statusColor
+            if (-not [string]::IsNullOrWhiteSpace([string]$cap.LicenseStatusDetail)) {
+                Write-Host "  Detail: $($cap.LicenseStatusDetail)" -ForegroundColor DarkYellow
+            }
+            $matrixAvailable = @($matrixRows).Count -gt 0
+            $matrixAvailableCount  = @($matrixRows | Where-Object { $_.Available -eq 'Yes' }).Count
+            $matrixTotalCount      = @($matrixRows).Count
+            Write-Host "SKU rows: $(@($skuRows).Count)  |  Service plan rows: $(@($servicePlanRows).Count)  |  Feature matrix: $matrixAvailableCount/$matrixTotalCount features available"
             Write-Host ''
-            Write-Host '1. View tenant feature availability report'
+            Write-Host '1. View feature capability matrix (what this tenant has access to)'
             Write-Host '2. View detected SKUs'
             Write-Host '3. View detected SKU service plans'
             Write-Host '4. Export feature availability bundle (CSV + PDF)'
+            if ($cap.LicenseStatus -in @('Error', 'ScopeMissing', 'Unknown', 'SkuCmdletMissing')) {
+                Write-Host 'T. Re-connect Graph with Organization.Read.All scope and retry' -ForegroundColor Yellow
+            }
             Write-Host 'B. Back'
 
             $selection = Read-Host 'Select an option'
@@ -246,7 +256,13 @@ function Show-M365ExchangeMenu {
 
             switch ($normalizedSelection) {
                 '1' {
-                    Show-M365ReportData -InputObject $rows -Title $featureTitle -ForcePopout
+                    if (-not $matrixAvailable) {
+                        Write-Host 'Feature matrix is unavailable — SKU/license data could not be retrieved.' -ForegroundColor Yellow
+                        Write-Host 'Ensure Graph is connected with Organization.Read.All scope and use T to re-connect.' -ForegroundColor Yellow
+                    }
+                    else {
+                        Invoke-M365ConsoleReport -Data $matrixRows -Title $featureTitle
+                    }
                 }
                 '2' {
                     if (@($skuRows).Count -eq 0) {
@@ -265,7 +281,38 @@ function Show-M365ExchangeMenu {
                     }
                 }
                 '4' {
-                    Export-M365FeatureAvailabilityBundle -FeatureRows $rows -SkuRows $skuRows -ServicePlanRows $servicePlanRows
+                    Export-M365FeatureAvailabilityBundle -FeatureRows $matrixRows -SkuRows $skuRows -ServicePlanRows $servicePlanRows
+                }
+                'T' {
+                    Write-Host 'Reconnecting to Microsoft Graph with Organization.Read.All scope...' -ForegroundColor Cyan
+                    try {
+                        Connect-MgGraph -Scopes 'Organization.Read.All','User.Read.All','Group.Read.All','Mail.ReadBasic.All','MailboxSettings.Read','Directory.Read.All' -ErrorAction Stop | Out-Null
+                        Write-Host 'Reconnected. Re-fetching capability data...' -ForegroundColor Green
+                    }
+                    catch {
+                        Write-Host "Reconnect failed: $($_.Exception.Message)" -ForegroundColor Red
+                        Read-Host 'Press Enter to continue' | Out-Null
+                        continue
+                    }
+
+                    $cap = Get-M365TenantCapabilities
+
+                    $skuRows = @()
+                    $servicePlanRows = @()
+                    if ($cap.SkuCatalog -and @($cap.SkuCatalog).Count -gt 0) {
+                        $skuRows = @($cap.SkuCatalog | Select-Object SkuFriendlyName, SkuPartNumber, SkuId)
+                    }
+                    elseif ($cap.SkuPartNumbers -and @($cap.SkuPartNumbers).Count -gt 0) {
+                        $skuRows = @($cap.SkuPartNumbers | ForEach-Object { [pscustomobject]@{ SkuPartNumber = $_ } })
+                    }
+                    if ($cap.SkuServicePlans -and @($cap.SkuServicePlans).Count -gt 0) {
+                        $servicePlanRows = @($cap.SkuServicePlans | Select-Object SkuFriendlyName, SkuPartNumber, ServicePlanFriendlyName, ServicePlanName, ServicePlanId, ProvisioningStatus)
+                    }
+                    $matrixRows = @()
+                    if (@($servicePlanRows).Count -gt 0) {
+                        $matrixRows = @(Get-M365FeatureCapabilityMatrix -ServicePlans $cap.SkuServicePlans)
+                    }
+                    continue
                 }
                 'B' {
                     return
@@ -275,7 +322,7 @@ function Show-M365ExchangeMenu {
                 }
             }
 
-            if ($normalizedSelection -ne 'B') {
+            if ($normalizedSelection -notin @('B', 'T', '1')) {
                 Read-Host 'Press Enter to continue' | Out-Null
             }
         }
@@ -404,9 +451,9 @@ function Show-M365ExchangeMenu {
             if (-not $isExchangeConnected) {
                 Write-Host '2. Connect Exchange Online PowerShell (delegation report)' -ForegroundColor Green
             }
-            Write-Host '3. List user mailboxes' -ForegroundColor ($(if ($isGraphConnected) { 'White' } else { 'Gray' }))
-            Write-Host '4. List shared mailboxes' -ForegroundColor ($(if ($isGraphConnected) { 'White' } else { 'Gray' }))
-            Write-Host '5. List resource mailboxes' -ForegroundColor ($(if ($isGraphConnected) { 'White' } else { 'Gray' }))
+            Write-Host '3. List user mailboxes' -ForegroundColor ($(if ($isGraphConnected -and $isExchangeConnected) { 'White' } elseif ($isGraphConnected -or $isExchangeConnected) { 'Yellow' } else { 'Gray' }))
+            Write-Host '4. List shared mailboxes' -ForegroundColor ($(if ($isExchangeConnected) { 'White' } else { 'Gray' }))
+            Write-Host '5. List resource mailboxes' -ForegroundColor ($(if ($isExchangeConnected) { 'White' } else { 'Gray' }))
             if ($browserPopout -ne 'None') {
                 Write-Host '6. List contacts' -ForegroundColor ($(if ($isGraphConnected) { 'White' } else { 'Gray' }))
                 Write-Host '7. List distribution groups' -ForegroundColor ($(if ($isGraphConnected) { 'White' } else { 'Gray' }))
@@ -415,6 +462,8 @@ function Show-M365ExchangeMenu {
                 Write-Host '10. Mailbox size and archive report' -ForegroundColor ($(if ($isExchangeConnected) { 'White' } else { 'Gray' }))
                 Write-Host '11. Export exchange reports to CSV' -ForegroundColor ($(if ($isGraphConnected -or $isExchangeConnected) { 'White' } else { 'Gray' }))
             }
+            $recentCount = if (Test-Path variable:script:M365ReportHistory) { $script:M365ReportHistory.Count } else { 0 }
+            Write-Host "R. Recent reports$(if ($recentCount -gt 0) { " ($recentCount this session)" } else { '' })" -ForegroundColor ($(if ($recentCount -gt 0) { 'Cyan' } else { 'Gray' }))
             Write-Host 'B. Back'
 
             $selection = Read-Host 'Select an option'
@@ -442,18 +491,25 @@ function Show-M365ExchangeMenu {
                 continue
             }
 
-            if ((-not $isGraphConnected) -and ($normalizedSelection -in @('3', '4', '5', '6', '7', '8'))) {
+            if ((-not $isGraphConnected) -and ($normalizedSelection -in @('3', '6', '7', '8'))) {
                 Write-Host 'Please connect to Microsoft Graph first (option 1).' -ForegroundColor Yellow
                 Read-Host 'Press Enter to continue' | Out-Null
                 continue
             }
 
-            if ((-not $isExchangeConnected) -and ($normalizedSelection -in @('9', '10'))) {
+            if ((-not $isExchangeConnected) -and ($normalizedSelection -eq '3')) {
+                Write-Host 'The user mailbox inventory requires Exchange Online PowerShell (option 2) for mailbox schema data.' -ForegroundColor Yellow
+                Read-Host 'Press Enter to continue' | Out-Null
+                continue
+            }
+
+            if ((-not $isExchangeConnected) -and ($normalizedSelection -in @('4', '5', '9', '10'))) {
                 Write-Host 'Please connect to Exchange Online PowerShell first (option 2).' -ForegroundColor Yellow
                 Read-Host 'Press Enter to continue' | Out-Null
                 continue
             }
 
+            $skipContinuePrompt = $false
             try {
                 switch ($normalizedSelection) {
                     '1' {
@@ -463,41 +519,54 @@ function Show-M365ExchangeMenu {
                         Connect-M365ExchangePowerShell
                     }
                     '3' {
+                        $skipContinuePrompt = $true
                         $reportData = Get-M365MailboxInventory
-                        Show-M365ReportData -InputObject $reportData -Title 'User Mailbox Inventory'
+                        Invoke-M365ConsoleReport -Data $reportData -Title 'User Mailbox Inventory'
                     }
                     '4' {
+                        $skipContinuePrompt = $true
                         $reportData = Get-M365SharedMailboxInventory
-                        Show-M365ReportData -InputObject $reportData -Title 'Shared Mailbox Inventory'
+                        Invoke-M365ConsoleReport -Data $reportData -Title 'Shared Mailbox Inventory'
                     }
                     '5' {
+                        $skipContinuePrompt = $true
                         $reportData = Get-M365ResourceMailboxInventory
-                        Show-M365ReportData -InputObject $reportData -Title 'Resource Mailbox Inventory'
+                        Invoke-M365ConsoleReport -Data $reportData -Title 'Resource Mailbox Inventory'
                     }
                     '6' {
+                        $skipContinuePrompt = $true
                         $reportData = Get-M365ContactInventory
-                        Show-M365ReportData -InputObject $reportData -Title 'Contact Inventory'
+                        Invoke-M365ConsoleReport -Data $reportData -Title 'Contact Inventory'
                     }
                     '7' {
+                        $skipContinuePrompt = $true
                         $includeMembers = Read-M365YesNo -Prompt 'Include distribution group members?' -Default $true
                         $reportData = Get-M365DistributionGroupInventory -IncludeMembers:$includeMembers
-                        Show-M365ReportData -InputObject $reportData -Title 'Distribution Group Inventory' -ExpandColumn 'Members'
+                        Invoke-M365ConsoleReport -Data $reportData -Title 'Distribution Group Inventory' -ExpandColumn 'Members'
                     }
                     '8' {
+                        $skipContinuePrompt = $true
                         $includeMembers = Read-M365YesNo -Prompt 'Include Microsoft 365 group members?' -Default $true
                         $reportData = Get-M365UnifiedGroupInventory -IncludeMembers:$includeMembers
-                        Show-M365ReportData -InputObject $reportData -Title 'M365 Group Inventory' -ExpandColumn 'Members'
+                        Invoke-M365ConsoleReport -Data $reportData -Title 'M365 Group Inventory' -ExpandColumn 'Members'
                     }
                     '9' {
+                        $skipContinuePrompt = $true
                         Invoke-M365DelegationReport
                     }
                     '10' {
+                        $skipContinuePrompt = $true
                         $includeLastEmailReceived = Read-M365YesNo -Prompt 'Include last email received date? (adds runtime)' -Default $false
                         $reportData = Get-M365MailboxSizeReport -IncludeLastEmailReceived:$includeLastEmailReceived
-                        Show-M365ReportData -InputObject $reportData -Title 'Mailbox Size and Archive Report' -ChartColumn 'TotalItemSizeMB'
+                        Invoke-M365ConsoleReport -Data $reportData -Title 'Mailbox Size and Archive Report' -ChartColumn 'TotalItemSizeMB'
                     }
                     '11' {
+                        $skipContinuePrompt = $true
                         if ($browserPopout -eq 'None') { Write-Warning 'Unknown selection.' } else { Show-M365ExchangeExportMenu }
+                    }
+                    'R' {
+                        $skipContinuePrompt = $true
+                        Show-M365RecentReports
                     }
                     'B' {
                         return
@@ -511,7 +580,7 @@ function Show-M365ExchangeMenu {
                 Write-Host $_.Exception.Message -ForegroundColor Red
             }
 
-            if ($normalizedSelection -ne 'B') {
+            if (-not $skipContinuePrompt -and $normalizedSelection -ne 'B') {
                 Read-Host 'Press Enter to continue' | Out-Null
             }
         }
@@ -548,6 +617,8 @@ function Show-M365ExchangeMenu {
                     Write-Host '7. Export duplicate group usage to CSV' -ForegroundColor ($(if ($isGraphConnected) { 'White' } else { 'Gray' }))
                 }
             }
+            Write-Host '8. Analyze AI application usage (Copilot, ChatGPT, Claude, Gemini, Grok)' -ForegroundColor ($(if ($isGraphConnected) { 'White' } else { 'Gray' }))
+            Write-Host '9. Export AI application usage to CSV' -ForegroundColor ($(if ($isGraphConnected) { 'White' } else { 'Gray' }))
             Write-Host 'B. Back'
 
             $selection = Read-Host 'Select an option'
@@ -563,7 +634,7 @@ function Show-M365ExchangeMenu {
                 continue
             }
 
-            if ((-not $isGraphConnected) -and ($normalizedSelection -in @('2', '3', '4', '5', '6', '7'))) {
+            if ((-not $isGraphConnected) -and ($normalizedSelection -in @('2', '3', '4', '5', '6', '7', '8', '9'))) {
                 Write-Host 'Please connect to Microsoft Graph first (option 1).' -ForegroundColor Yellow
                 Read-Host 'Press Enter to continue' | Out-Null
                 continue
@@ -645,6 +716,33 @@ function Show-M365ExchangeMenu {
 
                         Show-M365ReportData -InputObject $reportData -Title 'Entra Duplicate Group Usage'
                     }
+                    '8' {
+                        $daysInput = Read-Host 'Days to review for AI app sign-in activity [default: 30]'
+                        $days = 30
+                        if (-not [string]::IsNullOrWhiteSpace($daysInput)) {
+                            $parsedDays = 0
+                            if ([int]::TryParse($daysInput, [ref]$parsedDays) -and $parsedDays -ge 1 -and $parsedDays -le 180) {
+                                $days = $parsedDays
+                            }
+                        }
+
+                        $reportData = Get-M365AIApplicationUsageReport -Days $days
+                        Invoke-M365ConsoleReport -Data $reportData -Title 'AI Application Usage'
+                    }
+                    '9' {
+                        $exportPath = Read-M365ExportPath -ReportName 'AI application usage'
+                        $daysInput = Read-Host 'Days to review for AI app sign-in activity [default: 30]'
+                        $days = 30
+                        if (-not [string]::IsNullOrWhiteSpace($daysInput)) {
+                            $parsedDays = 0
+                            if ([int]::TryParse($daysInput, [ref]$parsedDays) -and $parsedDays -ge 1 -and $parsedDays -le 180) {
+                                $days = $parsedDays
+                            }
+                        }
+
+                        $reportData = Get-M365AIApplicationUsageReport -Days $days -ExportPath $exportPath
+                        Invoke-M365ConsoleReport -Data $reportData -Title 'AI Application Usage'
+                    }
                     'B' {
                         return
                     }
@@ -675,7 +773,7 @@ function Show-M365ExchangeMenu {
 
         $form = New-Object System.Windows.Forms.Form
         $form.Text = 'M365 Exchange Tools - Configuration'
-        $form.Size = New-Object System.Drawing.Size(760, 640)
+        $form.Size = New-Object System.Drawing.Size(760, 690)
         $form.StartPosition = 'CenterScreen'
         $form.FormBorderStyle = 'FixedDialog'
         $form.MaximizeBox = $false
@@ -690,7 +788,8 @@ function Show-M365ExchangeMenu {
             @{ Text = 'File Name Template'; Y = 140 },
             @{ Text = 'Primary Color (#RRGGBB)'; Y = 180 },
             @{ Text = 'Secondary Color (#RRGGBB)'; Y = 220 },
-            @{ Text = 'Font Family'; Y = 260 }
+            @{ Text = 'Font Family'; Y = 260 },
+            @{ Text = 'Exchange Auth Mode'; Y = 300 }
         )
 
         foreach ($item in $labels) {
@@ -856,9 +955,25 @@ function Show-M365ExchangeMenu {
         $lblFontHint.Font = New-Object System.Drawing.Font('Segoe UI', 8)
         $form.Controls.Add($lblFontHint)
 
+        $cmbAuthMode = New-Object System.Windows.Forms.ComboBox
+        $cmbAuthMode.Location = New-Object System.Drawing.Point(230, 298)
+        $cmbAuthMode.Size = New-Object System.Drawing.Size(220, 24)
+        $cmbAuthMode.Font = $font
+        $cmbAuthMode.DropDownStyle = 'DropDownList'
+        [void]$cmbAuthMode.Items.AddRange(@('Auto', 'Interactive', 'DisableWAM', 'Device'))
+        $cmbAuthMode.Text = [string]$settings.ExchangeAuthMode
+        $form.Controls.Add($cmbAuthMode)
+
+        $lblAuthHint = New-Object System.Windows.Forms.Label
+        $lblAuthHint.Text = 'Example: DisableWAM to avoid broker/WAM issues'
+        $lblAuthHint.Location = New-Object System.Drawing.Point(230, 322)
+        $lblAuthHint.Size = New-Object System.Drawing.Size(340, 16)
+        $lblAuthHint.Font = New-Object System.Drawing.Font('Segoe UI', 8)
+        $form.Controls.Add($lblAuthHint)
+
         $chkBranding = New-Object System.Windows.Forms.CheckBox
         $chkBranding.Text = 'Enable HTML branding'
-        $chkBranding.Location = New-Object System.Drawing.Point(230, 320)
+        $chkBranding.Location = New-Object System.Drawing.Point(230, 360)
         $chkBranding.Size = New-Object System.Drawing.Size(220, 24)
         $chkBranding.Font = $font
         $chkBranding.Checked = [bool]$settings.HtmlBrandingEnabled
@@ -866,7 +981,7 @@ function Show-M365ExchangeMenu {
 
         $chkShowName = New-Object System.Windows.Forms.CheckBox
         $chkShowName.Text = 'Show company name in HTML'
-        $chkShowName.Location = New-Object System.Drawing.Point(230, 350)
+        $chkShowName.Location = New-Object System.Drawing.Point(230, 390)
         $chkShowName.Size = New-Object System.Drawing.Size(260, 24)
         $chkShowName.Font = $font
         $chkShowName.Checked = [bool]$settings.HtmlShowCompanyName
@@ -874,7 +989,7 @@ function Show-M365ExchangeMenu {
 
         $chkShowLogo = New-Object System.Windows.Forms.CheckBox
         $chkShowLogo.Text = 'Show company logo in HTML'
-        $chkShowLogo.Location = New-Object System.Drawing.Point(230, 380)
+        $chkShowLogo.Location = New-Object System.Drawing.Point(230, 420)
         $chkShowLogo.Size = New-Object System.Drawing.Size(260, 24)
         $chkShowLogo.Font = $font
         $chkShowLogo.Checked = [bool]$settings.HtmlShowCompanyLogo
@@ -882,7 +997,7 @@ function Show-M365ExchangeMenu {
 
         $lblTokens = New-Object System.Windows.Forms.Label
         $lblTokens.Text = 'Template tokens: {Title} {Timestamp} {Date} {Time} {CompanyName}'
-        $lblTokens.Location = New-Object System.Drawing.Point(230, 410)
+        $lblTokens.Location = New-Object System.Drawing.Point(230, 450)
         $lblTokens.Size = New-Object System.Drawing.Size(500, 24)
         $lblTokens.Font = $font
         $form.Controls.Add($lblTokens)
@@ -907,17 +1022,21 @@ function Show-M365ExchangeMenu {
             $primary = if ($primary.StartsWith('#')) { $primary } else { "#$primary" }
             $secondary = if ($secondary.StartsWith('#')) { $secondary } else { "#$secondary" }
 
-            Set-M365UiSettings \
-                -CompanyName $txtCompany.Text \
-                -LogoPath $txtLogo.Text \
-                -ReportSavePath $txtSavePath.Text \
-                -FileNameTemplate $txtTemplate.Text \
-                -ThemePrimaryColor $primary \
-                -ThemeSecondaryColor $secondary \
-                -ReportFontFamily $cmbFont.Text \
-                -HtmlBrandingEnabled $chkBranding.Checked \
-                -HtmlShowCompanyName $chkShowName.Checked \
-                -HtmlShowCompanyLogo $chkShowLogo.Checked | Out-Null
+            $saveParams = @{
+                CompanyName         = $txtCompany.Text
+                LogoPath            = $txtLogo.Text
+                ReportSavePath      = $txtSavePath.Text
+                FileNameTemplate    = $txtTemplate.Text
+                ThemePrimaryColor   = $primary
+                ThemeSecondaryColor = $secondary
+                ReportFontFamily    = $cmbFont.Text
+                ExchangeAuthMode    = $cmbAuthMode.Text
+                HtmlBrandingEnabled = $chkBranding.Checked
+                HtmlShowCompanyName = $chkShowName.Checked
+                HtmlShowCompanyLogo = $chkShowLogo.Checked
+            }
+
+            Set-M365UiSettings @saveParams | Out-Null
 
             $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
             $form.Close()
@@ -937,6 +1056,7 @@ function Show-M365ExchangeMenu {
             $txtPrimaryColor.Text = '#0f766e'
             $txtSecondaryColor.Text = '#1e293b'
             $cmbFont.Text = 'Segoe UI'
+            $cmbAuthMode.Text = 'Auto'
             $chkBranding.Checked = $true
             $chkShowName.Checked = $true
             $chkShowLogo.Checked = $true
@@ -954,9 +1074,721 @@ function Show-M365ExchangeMenu {
         [void]$form.ShowDialog()
     }
 
+    function Add-M365ReportHistoryEntry {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory)]
+            [string]$Title,
+
+            [Parameter(Mandatory)]
+            [string]$Path
+        )
+
+        if (-not (Test-Path variable:script:M365ReportHistory)) {
+            $script:M365ReportHistory = [System.Collections.Generic.List[object]]::new()
+        }
+
+        $script:M365ReportHistory.Add([pscustomobject]@{
+            Title       = $Title
+            Path        = $Path
+            GeneratedAt = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        })
+    }
+
+    function Show-M365RecentReports {
+        [CmdletBinding()]
+        param()
+
+        if (-not (Test-Path variable:script:M365ReportHistory) -or $script:M365ReportHistory.Count -eq 0) {
+            Write-Host 'No reports generated in this session yet.' -ForegroundColor Yellow
+            Read-Host 'Press Enter to continue' | Out-Null
+            return
+        }
+
+        do {
+            Clear-Host
+            Write-Host 'Recent Reports  (this session)' -ForegroundColor Cyan
+            Write-Host ''
+
+            $index = 1
+            foreach ($entry in $script:M365ReportHistory) {
+                $exists = Test-Path $entry.Path
+                $existsLabel = if ($exists) { '' } else { '  [file removed]' }
+                $color = if ($exists) { 'White' } else { 'DarkGray' }
+                Write-Host "$index. [$($entry.GeneratedAt)]  $($entry.Title)$existsLabel" -ForegroundColor $color
+                Write-Host "   $($entry.Path)" -ForegroundColor DarkGray
+                $index++
+            }
+
+            Write-Host ''
+            Write-Host 'Enter number to re-open   C  Clear history   B  Back'
+            $sel = (Read-Host 'Select').Trim()
+            $selUpper = $sel.ToUpperInvariant()
+
+            switch ($selUpper) {
+                'B' { return }
+                'C' {
+                    $script:M365ReportHistory = [System.Collections.Generic.List[object]]::new()
+                    Write-Host 'History cleared.' -ForegroundColor DarkCyan
+                    Read-Host 'Press Enter to continue' | Out-Null
+                    return
+                }
+                default {
+                    $idx = 0
+                    if ([int]::TryParse($sel, [ref]$idx) -and $idx -ge 1 -and $idx -le $script:M365ReportHistory.Count) {
+                        $entry = $script:M365ReportHistory[$idx - 1]
+                        if (Test-Path $entry.Path) {
+                            Start-Process $entry.Path
+                        }
+                        else {
+                            Write-Host 'File no longer exists on disk.' -ForegroundColor Red
+                            Read-Host 'Press Enter to continue' | Out-Null
+                        }
+                    }
+                    else {
+                        Write-Host 'Invalid selection.' -ForegroundColor Yellow
+                        Read-Host 'Press Enter to continue' | Out-Null
+                    }
+                }
+            }
+        }
+        while ($true)
+    }
+
+    function Invoke-M365ConsoleReport {
+        [CmdletBinding()]
+        param(
+            [Parameter()]
+            [AllowNull()]
+            [AllowEmptyCollection()]
+            [object[]]$Data,
+
+            [Parameter(Mandatory)]
+            [string]$Title,
+
+            [Parameter()]
+            [string]$ChartColumn,
+
+            [Parameter()]
+            [string]$ExpandColumn
+        )
+
+        $rows = if ($null -eq $Data) { @() } else { @($Data) }
+
+        if ($rows.Count -eq 0) {
+            Write-Host "No records found for '$Title'." -ForegroundColor DarkYellow
+            Read-Host 'Press Enter to continue' | Out-Null
+            return
+        }
+
+        Clear-Host
+        Write-Host "=== $Title ===" -ForegroundColor Cyan
+        Write-Host "Records: $($rows.Count)" -ForegroundColor DarkCyan
+        Write-Host ''
+        $rows | Format-Table -AutoSize | Out-Host
+        Write-Host ''
+        Write-Host 'H  Open HTML report    E  Export CSV    B  Back' -ForegroundColor DarkGray
+
+        do {
+            $action = (Read-Host 'Action').Trim().ToUpperInvariant()
+            switch ($action) {
+                'H' {
+                    $htmlParams = @{
+                        InputObject = $rows
+                        Title       = $Title
+                        ForcePopout = $true
+                        PassThru    = $true
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($ChartColumn))  { $htmlParams['ChartColumn']  = $ChartColumn }
+                    if (-not [string]::IsNullOrWhiteSpace($ExpandColumn)) { $htmlParams['ExpandColumn'] = $ExpandColumn }
+                    $report = Show-M365ReportData @htmlParams
+                    if ($report -and -not [string]::IsNullOrWhiteSpace([string]$report.ReportPath)) {
+                        Add-M365ReportHistoryEntry -Title $Title -Path $report.ReportPath
+                    }
+                    return
+                }
+                'E' {
+                    $savePath = Get-M365ConfiguredSavePath
+                    if (-not (Test-Path -Path $savePath)) {
+                        New-Item -Path $savePath -ItemType Directory -Force | Out-Null
+                    }
+                    $stem = New-M365ConfiguredFileStem -Title $Title
+                    $csvPath = Join-Path -Path $savePath -ChildPath "$stem.csv"
+                    $rows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+                    Write-Host "Exported: $csvPath" -ForegroundColor Green
+                    Add-M365ReportHistoryEntry -Title $Title -Path $csvPath
+                    Read-Host 'Press Enter to continue' | Out-Null
+                    return
+                }
+                'B' { return }
+                default { Write-Host 'Enter H, E, or B.' -ForegroundColor Yellow }
+            }
+        }
+        while ($true)
+    }
+
+    function Show-M365TenantAssessmentMenu {
+        [CmdletBinding()]
+        param()
+
+        do {
+            Clear-Host
+            $isGraphConnected    = Test-ExchangeOnlineConnection
+            $isExchangeConnected = Test-M365ExchangePowerShellConnection
+
+            Write-Host 'Tenant Assessment' -ForegroundColor Cyan
+            Write-Host "Microsoft Graph: $(if ($isGraphConnected) { 'Connected' } else { 'Not connected' })" -ForegroundColor ($(if ($isGraphConnected) { 'Green' } else { 'Yellow' }))
+            Write-Host "Exchange PowerShell: $(if ($isExchangeConnected) { 'Connected' } else { 'Not connected' })" -ForegroundColor ($(if ($isExchangeConnected) { 'Green' } else { 'Yellow' }))
+            Write-Host ''
+            Write-Host '  Identity & Access'
+            Write-Host '  1. Privileged role members (Global Admin sprawl check)' -ForegroundColor ($(if ($isGraphConnected) { 'White' } else { 'Gray' }))
+            Write-Host ''
+            Write-Host '  Messaging Risk'
+            Write-Host '  2. Mailbox forwarding rules (silent exfiltration check)' -ForegroundColor ($(if ($isExchangeConnected) { 'White' } else { 'Gray' }))
+            Write-Host ''
+            Write-Host '  Devices'
+            Write-Host '  3. Device inventory (all devices with stale/unmanaged flags)' -ForegroundColor ($(if ($isGraphConnected) { 'White' } else { 'Gray' }))
+            Write-Host ''
+            Write-Host '  Security Configuration'
+            Write-Host '  4. Conditional Access policy check (10 key security policies)' -ForegroundColor ($(if ($isGraphConnected) { 'White' } else { 'Gray' }))
+            Write-Host ''
+            Write-Host '  AI Governance'
+            Write-Host '  5. AI application usage (Copilot, ChatGPT, Claude, Gemini, Grok, DeepSeek, Qwen, ERNIE, Kimi, Doubao...)' -ForegroundColor ($(if ($isGraphConnected) { 'White' } else { 'Gray' }))
+            Write-Host ''
+            Write-Host '  Licensing'
+            Write-Host '  6. Feature availability' -ForegroundColor Green
+            Write-Host ''
+            $runAllColor = if ($isGraphConnected) { 'Cyan' } else { 'Gray' }
+            Write-Host 'A. Run All — Generate full assessment HTML report' -ForegroundColor $runAllColor
+            Write-Host 'B. Back'
+
+            $selection = Read-Host 'Select an option'
+            if ([string]::IsNullOrWhiteSpace($selection)) {
+                continue
+            }
+
+            $normalizedSelection = $selection.ToUpperInvariant()
+
+            if ((-not $isGraphConnected) -and ($normalizedSelection -in @('1', '3', '4', '5'))) {
+                Write-Host 'Connect to Microsoft Graph first (option 1 on the main menu).' -ForegroundColor Yellow
+                Read-Host 'Press Enter to continue' | Out-Null
+                continue
+            }
+
+            if ((-not $isExchangeConnected) -and ($normalizedSelection -eq '2')) {
+                Write-Host 'Connect to Exchange Online PowerShell first (option 2 on the Exchange menu).' -ForegroundColor Yellow
+                Read-Host 'Press Enter to continue' | Out-Null
+                continue
+            }
+
+            if ((-not $isGraphConnected) -and ($normalizedSelection -eq 'A')) {
+                Write-Host 'Connect to Microsoft Graph first to run the full assessment.' -ForegroundColor Yellow
+                Read-Host 'Press Enter to continue' | Out-Null
+                continue
+            }
+
+            $skipContinuePrompt = $false
+
+            try {
+                switch ($normalizedSelection) {
+                    '1' {
+                        $skipContinuePrompt = $true
+                        $reportData = Get-M365PrivilegedRoleMembers
+                        Invoke-M365ConsoleReport -Data $reportData -Title 'Privileged Role Members'
+                    }
+                    '2' {
+                        $skipContinuePrompt = $true
+                        $reportData = Get-M365MailboxForwardingReport
+                        Invoke-M365ConsoleReport -Data $reportData -Title 'Mailbox Forwarding Rules'
+                    }
+                    '3' {
+                        $skipContinuePrompt = $true
+                        $scopeSelection = Read-Host 'Scope: A=All devices, P=Problems only (stale or unmanaged) [default: P]'
+                        $problemOnly = ([string]$scopeSelection).ToUpperInvariant() -ne 'A'
+                        $reportTitle = if ($problemOnly) { 'Device Inventory — Problems Only' } else { 'Device Inventory — All Devices' }
+                        $reportData = Get-M365DeviceInventory -ProblemDevicesOnly:$problemOnly
+                        Invoke-M365ConsoleReport -Data $reportData -Title $reportTitle
+                    }
+                    '4' {
+                        $skipContinuePrompt = $true
+                        $reportData = Get-M365ConditionalAccessAnalysis
+                        Invoke-M365ConsoleReport -Data $reportData -Title 'Conditional Access Policy Analysis'
+                    }
+                    '5' {
+                        $skipContinuePrompt = $true
+                        $daysInput = Read-Host 'Days to review for AI app sign-in activity [default: 30]'
+                        $days = 30
+                        if (-not [string]::IsNullOrWhiteSpace($daysInput)) {
+                            $parsedDays = 0
+                            if ([int]::TryParse($daysInput, [ref]$parsedDays) -and $parsedDays -ge 1 -and $parsedDays -le 180) {
+                                $days = $parsedDays
+                            }
+                        }
+                        $reportData = Get-M365AIApplicationUsageReport -Days $days
+                        Invoke-M365ConsoleReport -Data $reportData -Title 'AI Application Usage'
+                    }
+                    '6' {
+                        $skipContinuePrompt = $true
+                        Show-M365FeatureAvailability
+                    }
+                    'A' {
+                        $skipContinuePrompt = $true
+
+                        $sections = [System.Collections.Generic.List[object]]::new()
+
+                        # 1. Privileged roles
+                        Write-Host '[1/6] Collecting privileged role members...' -ForegroundColor Cyan
+                        $rolesData = @(); $rolesNote = ''; $rolesAvail = $isGraphConnected
+                        if ($isGraphConnected) {
+                            try {
+                                $rolesData = @(Get-M365PrivilegedRoleMembers)
+                                $adminCount = @($rolesData | Where-Object { [string]$_.RoleName -like '*Global Admin*' }).Count
+                                $rolesNote = if ($adminCount -gt 4) { "Risk: $adminCount Global Administrator accounts detected — review for sprawl." }
+                                             elseif ($adminCount -eq 0) { 'No Global Administrator role members found.' }
+                                             else { "$adminCount Global Administrator account(s) detected." }
+                            }
+                            catch { $rolesNote = "Error collecting role members: $($_.Exception.Message)"; $rolesAvail = $false }
+                        } else { $rolesNote = 'Microsoft Graph connection not available.' }
+                        $sections.Add(@{
+                            Id          = 'roles'
+                            Title       = 'Identity & Access — Privileged Role Members'
+                            Description = 'All active Entra ID directory role members. Focus on Global Administrator count — each additional Global Admin widens the blast radius of any account compromise.'
+                            Note        = $rolesNote
+                            Available   = $rolesAvail
+                            Rows        = $rolesData
+                        })
+
+                        # 2. Forwarding rules
+                        Write-Host '[2/6] Collecting mailbox forwarding rules...' -ForegroundColor Cyan
+                        $fwdData = @(); $fwdNote = ''; $fwdAvail = $isExchangeConnected
+                        if ($isExchangeConnected) {
+                            try {
+                                $fwdData = @(Get-M365MailboxForwardingReport)
+                                $extCount = @($fwdData | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.ForwardingSmtpAddress) }).Count
+                                $fwdNote = if ($extCount -gt 0) { "Risk: $extCount mailbox(es) forwarding externally via ForwardingSmtpAddress — review immediately." }
+                                           elseif ($fwdData.Count -gt 0) { "$($fwdData.Count) mailbox(es) with internal forwarding configured." }
+                                           else { 'No mailbox forwarding rules found — clean.' }
+                            }
+                            catch { $fwdNote = "Error collecting forwarding data: $($_.Exception.Message)"; $fwdAvail = $false }
+                        } else { $fwdNote = 'Exchange Online PowerShell connection not available.' }
+                        $sections.Add(@{
+                            Id          = 'forwarding'
+                            Title       = 'Messaging Risk — Mailbox Forwarding Rules'
+                            Description = 'Mailboxes with active forwarding rules configured. External forwarding (ForwardingSmtpAddress) is a primary indicator of data exfiltration risk and should be reviewed as a priority.'
+                            Note        = $fwdNote
+                            Available   = $fwdAvail
+                            Rows        = $fwdData
+                        })
+
+                        # 3. Devices
+                        Write-Host '[3/6] Collecting device inventory...' -ForegroundColor Cyan
+                        $devData = @(); $devNote = ''; $devAvail = $isGraphConnected
+                        if ($isGraphConnected) {
+                            try {
+                                $devData = @(Get-M365DeviceInventory)
+                                $staleCount   = @($devData | Where-Object { $_.StaleDevice -eq $true }).Count
+                                $unmanagedCount = @($devData | Where-Object { $_.IsManaged -eq $false }).Count
+                                $devNote = if ($staleCount -gt 0) { "$staleCount stale device(s) (no sign-in within 90 days). $unmanagedCount unmanaged device(s) detected." }
+                                           else { "$($devData.Count) devices — none stale within 90 days." }
+                            }
+                            catch { $devNote = "Error collecting device data: $($_.Exception.Message)"; $devAvail = $false }
+                        } else { $devNote = 'Microsoft Graph connection not available.' }
+                        $sections.Add(@{
+                            Id          = 'devices'
+                            Title       = 'Devices — Entra ID Device Inventory'
+                            Description = 'All devices registered in Entra ID with join type, management state, compliance state, and last sign-in activity. Stale or unmanaged devices represent uncontrolled credential exposure.'
+                            Note        = $devNote
+                            Available   = $devAvail
+                            Rows        = $devData
+                        })
+
+                        # 4. Conditional Access analysis
+                        Write-Host '[4/6] Analysing Conditional Access policies...' -ForegroundColor Cyan
+                        $caData = @(); $caNote = ''; $caAvail = $isGraphConnected
+                        if ($isGraphConnected) {
+                            try {
+                                $caData = @(Get-M365ConditionalAccessAnalysis)
+                                $missingCount  = @($caData | Where-Object { $_.Status -eq 'Missing' }).Count
+                                $disabledCount = @($caData | Where-Object { $_.Status -eq 'Present' -and $_.PolicyState -ne 'Enabled' }).Count
+                                $caNote = if ($missingCount -gt 5) { "Risk: $missingCount of 10 key Conditional Access policies are missing from this tenant." }
+                                          elseif ($missingCount -gt 0) { "Warning: $missingCount of 10 recommended CA policies not found. $disabledCount present but not enabled." }
+                                          else { 'All 10 recommended Conditional Access policies are present.' }
+                            }
+                            catch { $caNote = "Error running CA analysis: $($_.Exception.Message)"; $caAvail = $false }
+                        } else { $caNote = 'Microsoft Graph connection not available.' }
+                        $sections.Add(@{
+                            Id          = 'ca-analysis'
+                            Title       = 'Security Configuration — Conditional Access Policy Check'
+                            Description = '10-point check against the recommended Conditional Access baseline: MFA enforcement, legacy auth block, risk-based policies, session controls, and more.'
+                            Note        = $caNote
+                            Available   = $caAvail
+                            Rows        = $caData
+                        })
+
+                        # 5. AI application usage
+                        Write-Host '[5/6] Collecting AI application usage...' -ForegroundColor Cyan
+                        $aiData = @(); $aiNote = ''; $aiAvail = $isGraphConnected
+                        if ($isGraphConnected) {
+                            try {
+                                $aiData = @(Get-M365AIApplicationUsageReport -Days 30)
+                                $detectedCount = @($aiData | Where-Object { $_.Status -eq 'Detected' }).Count
+                                $chinaCount    = @($aiData | Where-Object { $_.Status -eq 'Detected' -and [string]$_.AIApplication -match 'China' }).Count
+                                $aiNote = if ($detectedCount -gt 0 -and $chinaCount -gt 0) {
+                                    "Warning: $detectedCount AI platform(s) detected, including $chinaCount Chinese-origin platform(s). Review vendor risk, data residency, and approved use immediately."
+                                }
+                                elseif ($detectedCount -gt 0) {
+                                    "Warning: $detectedCount AI platform(s) detected in Entra telemetry. Validate approval status, OAuth exposure, and data handling boundaries."
+                                }
+                                else {
+                                    'No matched AI application activity found in Entra sign-ins or enterprise apps for the sampled period.'
+                                }
+                            }
+                            catch { $aiNote = "Error collecting AI app usage: $($_.Exception.Message)"; $aiAvail = $false }
+                        } else { $aiNote = 'Microsoft Graph connection not available.' }
+                        $sections.Add(@{
+                            Id          = 'ai-apps'
+                            Title       = 'AI Governance — AI Application Usage'
+                            Description = 'Catalog-based detection of major AI platforms from Entra enterprise apps and sign-in logs, including Microsoft Copilot, OpenAI/ChatGPT, Anthropic Claude, Google Gemini, xAI Grok, Perplexity, and major Chinese-origin platforms such as DeepSeek, Qwen, ERNIE, Kimi, Doubao, and Yuanbao.'
+                            Note        = $aiNote
+                            Available   = $aiAvail
+                            Rows        = $aiData
+                        })
+
+                        # 6. Feature availability
+                        Write-Host '[6/6] Collecting feature availability / licensing...' -ForegroundColor Cyan
+                        $featData = @(); $featNote = ''; $featAvail = $isGraphConnected
+                        if ($isGraphConnected) {
+                            try {
+                                $cap = Get-M365TenantCapabilities
+                                if ($cap.SkuServicePlans -and @($cap.SkuServicePlans).Count -gt 0) {
+                                    $featData = @(Get-M365FeatureCapabilityMatrix -ServicePlans $cap.SkuServicePlans)
+                                    $availCount = @($featData | Where-Object { $_.Available -eq 'Yes' }).Count
+                                    $featNote = "$availCount of $($featData.Count) catalogued features available in this tenant."
+                                    if ([string]$cap.LicenseStatus -eq 'PartialData' -and -not [string]::IsNullOrWhiteSpace([string]$cap.LicenseStatusDetail)) {
+                                        $featNote += " Warning: Partial SKU/service plan data returned by Graph. $([string]$cap.LicenseStatusDetail)"
+                                    }
+                                } else {
+                                    switch ([string]$cap.LicenseStatus) {
+                                        'PartialData' {
+                                            $featNote = if ([string]::IsNullOrWhiteSpace([string]$cap.LicenseStatusDetail)) {
+                                                'Partial SKU/service plan data was returned by Graph, but no usable service plans remained for the feature matrix.'
+                                            } else {
+                                                "Partial SKU/service plan data returned by Graph, but no usable service plans remained for the feature matrix. $([string]$cap.LicenseStatusDetail)"
+                                            }
+                                        }
+                                        'ScopeMissing' {
+                                            $featNote = if ([string]::IsNullOrWhiteSpace([string]$cap.LicenseStatusDetail)) {
+                                                "Graph token missing Organization.Read.All scope. Reconnect Graph with -Scopes 'Organization.Read.All'."
+                                            } else {
+                                                [string]$cap.LicenseStatusDetail
+                                            }
+                                        }
+                                        'SkuCmdletMissing' {
+                                            $featNote = if ([string]::IsNullOrWhiteSpace([string]$cap.LicenseStatusDetail)) {
+                                                'Get-MgSubscribedSku cmdlet not found. Install/update Microsoft.Graph modules.'
+                                            } else {
+                                                [string]$cap.LicenseStatusDetail
+                                            }
+                                        }
+                                        'Error' {
+                                            $featNote = if ([string]::IsNullOrWhiteSpace([string]$cap.LicenseStatusDetail)) {
+                                                'Error retrieving SKU data from Microsoft Graph.'
+                                            } else {
+                                                "Error retrieving SKU data: $([string]$cap.LicenseStatusDetail)"
+                                            }
+                                        }
+                                        'NoneFound' {
+                                            $featNote = 'No subscribed SKUs returned by Graph for this tenant.'
+                                        }
+                                        default {
+                                            $featNote = 'License/SKU data could not be retrieved from Microsoft Graph.'
+                                        }
+                                    }
+                                    $featAvail = $false
+                                }
+                            }
+                            catch { $featNote = "Error collecting feature data: $($_.Exception.Message)"; $featAvail = $false }
+                        } else { $featNote = 'Microsoft Graph connection not available.' }
+                        $sections.Add(@{
+                            Id          = 'features'
+                            Title       = 'Licensing — Feature Capability Matrix'
+                            Description = 'Cross-reference of this tenant''s active service plans against a curated catalog of M365 features, organized by category.'
+                            Note        = $featNote
+                            Available   = $featAvail
+                            Rows        = $featData
+                        })
+
+                        Write-Host 'Generating assessment report...' -ForegroundColor Cyan
+                        $savePath = Get-M365ConfiguredSavePath
+                        $settings = Get-M365UiSettings
+                        $companyName = [string]$settings.CompanyName
+                        $reportTitle = if (-not [string]::IsNullOrWhiteSpace($companyName)) { "$companyName — Tenant Assessment" } else { 'M365 Tenant Assessment' }
+
+                        $reportPath = New-M365TenantAssessmentReport -Sections $sections -ReportTitle $reportTitle
+                        if (Test-Path -Path $reportPath) {
+                            Add-M365ReportHistoryEntry -Title $reportTitle -Path $reportPath
+                            Write-Host "Assessment report saved: $reportPath" -ForegroundColor Green
+
+                            $fileUri = ([System.Uri]$reportPath).AbsoluteUri
+                            $browserSetting = (Get-M365UiSettings).BrowserPopout
+                            switch ($browserSetting) {
+                                'Edge'    { $cmd = Get-Command -Name msedge.exe  -ErrorAction SilentlyContinue; if ($cmd) { Start-Process -FilePath $cmd.Source -ArgumentList "--app=$fileUri" } else { Start-Process $reportPath } }
+                                'Firefox' { $cmd = Get-Command -Name firefox.exe -ErrorAction SilentlyContinue; if ($cmd) { Start-Process -FilePath $cmd.Source -ArgumentList $fileUri } else { Start-Process $reportPath } }
+                                'Chrome'  { $cmd = Get-Command -Name chrome.exe  -ErrorAction SilentlyContinue; if ($cmd) { Start-Process -FilePath $cmd.Source -ArgumentList $fileUri } else { Start-Process $reportPath } }
+                                default   { Start-Process $reportPath }
+                            }
+                        }
+                        Read-Host 'Press Enter to continue' | Out-Null
+                    }
+                    'B' {
+                        return
+                    }
+                    Default {
+                        Write-Warning 'Unknown selection.'
+                    }
+                }
+            }
+            catch {
+                Write-Host $_.Exception.Message -ForegroundColor Red
+            }
+
+            if (-not $skipContinuePrompt -and $normalizedSelection -ne 'B') {
+                Read-Host 'Press Enter to continue' | Out-Null
+            }
+        }
+        while ($true)
+    }
+
+    function Show-ADAssessmentMenu {
+        [CmdletBinding()]
+        param()
+
+        do {
+            Clear-Host
+            $adModuleAvail = [bool](Get-Module ActiveDirectory -ErrorAction SilentlyContinue)
+            if (-not $adModuleAvail) {
+                $adModuleAvail = [bool](Get-Module ActiveDirectory -ListAvailable -ErrorAction SilentlyContinue)
+            }
+
+            Write-Host 'Active Directory Assessment' -ForegroundColor Cyan
+            $modColor = if ($adModuleAvail) { 'Green' } else { 'Yellow' }
+            $modLabel = if ($adModuleAvail) { 'Available' } else { 'Not available (install RSAT: AD DS Tools)' }
+            Write-Host "ActiveDirectory module: $modLabel" -ForegroundColor $modColor
+            Write-Host ''
+            Write-Host '  Forest & Domain' -ForegroundColor DarkGray
+            Write-Host '  1. Domain summary (forest, password policy, inventory)' -ForegroundColor $(if ($adModuleAvail) { 'White' } else { 'Gray' })
+            Write-Host '  2. Domain controller inventory (OS, roles, EOS status)' -ForegroundColor $(if ($adModuleAvail) { 'White' } else { 'Gray' })
+            Write-Host ''
+            Write-Host '  Health & Topology' -ForegroundColor DarkGray
+            Write-Host '  3. Replication health (per-DC partnership status)' -ForegroundColor $(if ($adModuleAvail) { 'White' } else { 'Gray' })
+            Write-Host '  4. DNS health (zones, scavenging, forwarders)' -ForegroundColor $(if ($adModuleAvail) { 'White' } else { 'Gray' })
+            Write-Host '  5. Sites and Services (sites, subnets, site links)' -ForegroundColor $(if ($adModuleAvail) { 'White' } else { 'Gray' })
+            Write-Host ''
+            Write-Host '  Security & Risk' -ForegroundColor DarkGray
+            Write-Host '  6. Security posture (delegation, LAPS, AS-REP, stale accounts...)' -ForegroundColor $(if ($adModuleAvail) { 'White' } else { 'Gray' })
+            Write-Host '  7. Operational risk (SYSVOL, GPO health, tombstone, schema...)' -ForegroundColor $(if ($adModuleAvail) { 'White' } else { 'Gray' })
+            Write-Host ''
+            Write-Host 'A. Run All — Generate full AD assessment HTML report' -ForegroundColor $(if ($adModuleAvail) { 'Cyan' } else { 'Gray' })
+            Write-Host 'B. Back'
+
+            $selection = Read-Host 'Select an option'
+            if ([string]::IsNullOrWhiteSpace($selection)) { continue }
+
+            $normalizedSelection = $selection.ToUpperInvariant()
+
+            if (-not $adModuleAvail -and $normalizedSelection -ne 'B') {
+                Write-Host 'ActiveDirectory module is not available. Install RSAT: Active Directory Domain Services and Lightweight Directory Services Tools.' -ForegroundColor Yellow
+                Read-Host 'Press Enter to continue' | Out-Null
+                continue
+            }
+
+            $serverInput = $null
+            if ($normalizedSelection -match '^[1-7A]$' -and $normalizedSelection -ne 'B') {
+                $srv = Read-Host 'Optional: target DC or domain FQDN (press Enter for default)'
+                $serverInput = $srv.Trim()
+            }
+            $spArgs = if (-not [string]::IsNullOrWhiteSpace($serverInput)) { @{ Server = $serverInput } } else { @{} }
+
+            $skipContinuePrompt = $false
+
+            try {
+                switch ($normalizedSelection) {
+                    '1' {
+                        $skipContinuePrompt = $true
+                        $reportData = Get-ADDomainSummary @spArgs
+                        Invoke-M365ConsoleReport -Data $reportData -Title 'AD Domain Summary'
+                    }
+                    '2' {
+                        $skipContinuePrompt = $true
+                        $reportData = Get-ADDomainControllerInventory @spArgs
+                        Invoke-M365ConsoleReport -Data $reportData -Title 'Domain Controller Inventory'
+                    }
+                    '3' {
+                        $skipContinuePrompt = $true
+                        $reportData = Get-ADReplicationHealth @spArgs
+                        Invoke-M365ConsoleReport -Data $reportData -Title 'AD Replication Health'
+                    }
+                    '4' {
+                        $skipContinuePrompt = $true
+                        $reportData = Get-ADDNSHealth @spArgs
+                        Invoke-M365ConsoleReport -Data $reportData -Title 'DNS Health'
+                    }
+                    '5' {
+                        $skipContinuePrompt = $true
+                        $reportData = Get-ADSitesAndServicesReport @spArgs
+                        Invoke-M365ConsoleReport -Data $reportData -Title 'Sites and Services'
+                    }
+                    '6' {
+                        $skipContinuePrompt = $true
+                        $reportData = Get-ADSecurityPosture @spArgs
+                        Invoke-M365ConsoleReport -Data $reportData -Title 'AD Security Posture'
+                    }
+                    '7' {
+                        $skipContinuePrompt = $true
+                        $reportData = Get-ADOperationalRiskReport @spArgs
+                        Invoke-M365ConsoleReport -Data $reportData -Title 'AD Operational Risk'
+                    }
+                    'A' {
+                        $skipContinuePrompt = $true
+                        $sections = [System.Collections.Generic.List[object]]::new()
+
+                        # 1. Domain Summary
+                        Write-Host '[1/7] Collecting domain summary...' -ForegroundColor Cyan
+                        $data = @(); $note = ''; $avail = $true
+                        try {
+                            $data = @(Get-ADDomainSummary @spArgs)
+                            $crit = @($data | Where-Object { $_.Status -eq 'Critical' }).Count
+                            $warn = @($data | Where-Object { $_.Status -eq 'Warning'  }).Count
+                            $note = if ($crit -gt 0) { "Critical findings: $crit item(s) require immediate attention." } elseif ($warn -gt 0) { "$warn warning(s) detected." } else { 'Domain configuration within expected parameters.' }
+                        }
+                        catch { $note = "Error: $($_.Exception.Message)"; $avail = $false }
+                        $sections.Add(@{ Id = 'domain-summary'; Title = 'Domain Summary'; Description = 'Forest/domain configuration, tombstone lifetime, KRBTGT password age, AD Recycle Bin, and default password policy.'; Note = $note; Available = $avail; Rows = $data })
+
+                        # 2. DC Inventory
+                        Write-Host '[2/7] Inventorying domain controllers...' -ForegroundColor Cyan
+                        $data = @(); $note = ''; $avail = $true
+                        try {
+                            $data = @(Get-ADDomainControllerInventory @spArgs)
+                            $eol  = @($data | Where-Object { $_.OSStatus -eq 'Critical' }).Count
+                            $note = if ($eol -gt 0) { "Critical: $eol DC(s) running end-of-life operating system — no security patches being applied." } else { "$($data.Count) DC(s) found — none on end-of-life OS." }
+                        }
+                        catch { $note = "Error: $($_.Exception.Message)"; $avail = $false }
+                        $sections.Add(@{ Id = 'dc-inventory'; Title = 'Domain Controller Inventory'; Description = 'Per-DC inventory with OS version, FSMO roles, Global Catalog status, RODC flag, SYSVOL replication mode, and end-of-support status.'; Note = $note; Available = $avail; Rows = $data })
+
+                        # 3. Replication
+                        Write-Host '[3/7] Collecting replication health...' -ForegroundColor Cyan
+                        $data = @(); $note = ''; $avail = $true
+                        try {
+                            $data = @(Get-ADReplicationHealth @spArgs)
+                            $fail = @($data | Where-Object { $_.Status -eq 'Critical' }).Count
+                            $note = if ($fail -gt 0) { "Critical: $fail replication partnership(s) failing. Domain consistency is at risk." } elseif ($data.Count -eq 0) { 'No replication partnerships found.' } else { "All $($data.Count) replication partnership(s) healthy." }
+                        }
+                        catch { $note = "Error: $($_.Exception.Message)"; $avail = $false }
+                        $sections.Add(@{ Id = 'replication'; Title = 'Replication Health'; Description = 'Per-DC replication partnership status, consecutive failure counts, days since last successful sync, and sync result codes.'; Note = $note; Available = $avail; Rows = $data })
+
+                        # 4. DNS Health
+                        Write-Host '[4/7] Collecting DNS health...' -ForegroundColor Cyan
+                        $data = @(); $note = ''; $avail = $true
+                        try {
+                            $data = @(Get-ADDNSHealth @spArgs)
+                            $issues = @($data | Where-Object { $_.Status -ne 'OK' -and $_.Status -ne 'Info' }).Count
+                            $note = if ($issues -gt 0) { "$issues DNS zone(s) with configuration issues (scavenging, dynamic update)." } else { "$($data.Count) zone(s) checked — no issues detected." }
+                        }
+                        catch { $note = "Error: $($_.Exception.Message)"; $avail = $false }
+                        $sections.Add(@{ Id = 'dns-health'; Title = 'DNS Health'; Description = 'DNS zone inventory with scavenging, dynamic update, and AD integration status. Uses DnsServer module when available; falls back to AD zone enumeration.'; Note = $note; Available = $avail; Rows = $data })
+
+                        # 5. Sites & Services
+                        Write-Host '[5/7] Collecting Sites and Services...' -ForegroundColor Cyan
+                        $data = @(); $note = ''; $avail = $true
+                        try {
+                            $data = @(Get-ADSitesAndServicesReport @spArgs)
+                            $issues = @($data | Where-Object { $_.Status -eq 'Warning' }).Count
+                            $note = if ($issues -gt 0) { "$issues site/subnet/link item(s) with topology issues." } else { "Sites and Services topology has no detected issues." }
+                        }
+                        catch { $note = "Error: $($_.Exception.Message)"; $avail = $false }
+                        $sections.Add(@{ Id = 'sites-services'; Title = 'Sites and Services'; Description = 'AD replication topology: sites with DC and subnet counts, unassigned subnets, and site link replication intervals.'; Note = $note; Available = $avail; Rows = $data })
+
+                        # 6. Security Posture
+                        Write-Host '[6/7] Running security posture analysis...' -ForegroundColor Cyan
+                        $data = @(); $note = ''; $avail = $true
+                        try {
+                            $data = @(Get-ADSecurityPosture @spArgs)
+                            $crit = @($data | Where-Object { $_.Status -eq 'Critical' }).Count
+                            $warn = @($data | Where-Object { $_.Status -eq 'Warning'  }).Count
+                            $note = if ($crit -gt 0) { "Critical: $crit security check(s) failed — immediate remediation required. $warn warning(s) also detected." } elseif ($warn -gt 0) { "$warn security warning(s) detected." } else { 'All security checks passed.' }
+                        }
+                        catch { $note = "Error: $($_.Exception.Message)"; $avail = $false }
+                        $sections.Add(@{ Id = 'security-posture'; Title = 'Security Posture'; Description = 'Structured security checks: privileged group sprawl, delegation misconfigurations, AS-REP/Kerberoastable accounts, LAPS deployment, Protected Users, and stale accounts.'; Note = $note; Available = $avail; Rows = $data })
+
+                        # 7. Operational Risk
+                        Write-Host '[7/7] Running operational risk analysis...' -ForegroundColor Cyan
+                        $data = @(); $note = ''; $avail = $true
+                        try {
+                            $data = @(Get-ADOperationalRiskReport @spArgs)
+                            $high = @($data | Where-Object { $_.Severity -in 'Critical','High' }).Count
+                            $note = if ($high -gt 0) { "$high Critical/High risk finding(s): SYSVOL replication, EOL OS, tombstone lifetime, or GPO health issues detected." } else { 'No Critical or High operational risks detected.' }
+                        }
+                        catch { $note = "Error: $($_.Exception.Message)"; $avail = $false }
+                        $sections.Add(@{ Id = 'operational-risk'; Title = 'Operational Risk'; Description = 'Infrastructure risk indicators: SYSVOL replication mode, tombstone lifetime, AD Recycle Bin, functional levels, GPO health, DC count, and end-of-life OS.'; Note = $note; Available = $avail; Rows = $data })
+
+                        Write-Host 'Generating AD assessment report...' -ForegroundColor Cyan
+                        $settings    = Get-M365UiSettings
+                        $companyName = [string]$settings.CompanyName
+                        $domain      = if (-not [string]::IsNullOrWhiteSpace($serverInput)) { $serverInput } else {
+                            try { (Get-ADDomain -ErrorAction SilentlyContinue).DNSRoot } catch { 'Active Directory' }
+                        }
+                        $reportTitle = if (-not [string]::IsNullOrWhiteSpace($companyName)) { "$companyName — AD Assessment ($domain)" } else { "AD Assessment — $domain" }
+                        $reportPath  = New-ADAssessmentReport -Sections $sections -ReportTitle $reportTitle
+
+                        if (Test-Path -Path $reportPath) {
+                            Add-M365ReportHistoryEntry -Title $reportTitle -Path $reportPath
+                            $fileUri = ([System.Uri]$reportPath).AbsoluteUri
+                            $browserSetting = (Get-M365UiSettings).BrowserPopout
+                            switch ($browserSetting) {
+                                'Edge'    { $cmd = Get-Command -Name msedge.exe  -ErrorAction SilentlyContinue; if ($cmd) { Start-Process -FilePath $cmd.Source -ArgumentList "--app=$fileUri" } else { Start-Process $reportPath } }
+                                'Firefox' { $cmd = Get-Command -Name firefox.exe -ErrorAction SilentlyContinue; if ($cmd) { Start-Process -FilePath $cmd.Source -ArgumentList $fileUri } else { Start-Process $reportPath } }
+                                'Chrome'  { $cmd = Get-Command -Name chrome.exe  -ErrorAction SilentlyContinue; if ($cmd) { Start-Process -FilePath $cmd.Source -ArgumentList $fileUri } else { Start-Process $reportPath } }
+                                default   { Start-Process $reportPath }
+                            }
+                        }
+                        Read-Host 'Press Enter to continue' | Out-Null
+                    }
+                    'B' { return }
+                    Default { Write-Warning 'Unknown selection.' }
+                }
+            }
+            catch {
+                Write-Host $_.Exception.Message -ForegroundColor Red
+            }
+
+            if (-not $skipContinuePrompt -and $normalizedSelection -ne 'B') {
+                Read-Host 'Press Enter to continue' | Out-Null
+            }
+        }
+        while ($true)
+    }
+
     function Invoke-M365SignOutOnExit {
         [CmdletBinding()]
         param()
+
+        function Remove-M365TemporaryReportFiles {
+            [CmdletBinding()]
+            param()
+
+            $tempReportDirectory = Join-Path -Path $env:TEMP -ChildPath 'M365-Exchange-Reports'
+            if (-not (Test-Path -Path $tempReportDirectory)) {
+                return
+            }
+
+            try {
+                Remove-Item -Path $tempReportDirectory -Recurse -Force -ErrorAction Stop
+                Write-Host "Removed temporary report files: $tempReportDirectory" -ForegroundColor DarkCyan
+            }
+            catch {
+                Write-Host "Could not remove temporary report files: $tempReportDirectory" -ForegroundColor Yellow
+            }
+        }
 
         Write-Host 'Signing out of active module sessions...' -ForegroundColor Cyan
 
@@ -993,218 +1825,10 @@ function Show-M365ExchangeMenu {
         catch {
         }
 
+        Remove-M365TemporaryReportFiles
+
         Write-Host 'Module sessions disconnected. Clearing host view...' -ForegroundColor DarkCyan
         Clear-Host
-    }
-
-    function Show-M365ConfigurationMenu {
-        [CmdletBinding()]
-        param()
-
-        do {
-            Clear-Host
-            $settings = Get-M365UiSettings
-
-            Write-Host 'Configuration' -ForegroundColor Cyan
-            Write-Host "1. Browser for reports: $($settings.BrowserPopout)"
-            Write-Host '2. Select browser'
-            Write-Host "3. Company name: $(if ([string]::IsNullOrWhiteSpace($settings.CompanyName)) { '[Not set]' } else { $settings.CompanyName })"
-            Write-Host "4. Logo path: $(if ([string]::IsNullOrWhiteSpace($settings.LogoPath)) { '[Not set]' } else { $settings.LogoPath })"
-            Write-Host '5. Set company name'
-            Write-Host '6. Set logo path'
-            Write-Host '7. Clear logo path'
-            Write-Host '8. Preview logo'
-            Write-Host "9. Report save path: $(if ([string]::IsNullOrWhiteSpace($settings.ReportSavePath)) { '[Default: Documents\\M365-Exchange-Exports]' } else { $settings.ReportSavePath })"
-            Write-Host '10. Set report save path'
-            Write-Host "11. File name template: $($settings.FileNameTemplate)"
-            Write-Host '12. Set file name template'
-            Write-Host "13. HTML branding enabled: $($settings.HtmlBrandingEnabled)"
-            Write-Host '14. Toggle HTML branding'
-            Write-Host "15. Show company name in HTML: $($settings.HtmlShowCompanyName)"
-            Write-Host '16. Toggle company name in HTML'
-            Write-Host "17. Show company logo in HTML: $($settings.HtmlShowCompanyLogo)"
-            Write-Host '18. Toggle company logo in HTML'
-            Write-Host "19. Primary color: $(if ([string]::IsNullOrWhiteSpace($settings.ThemePrimaryColor)) { '#0f766e' } else { $settings.ThemePrimaryColor })"
-            Write-Host "20. Secondary color: $(if ([string]::IsNullOrWhiteSpace($settings.ThemeSecondaryColor)) { '#1e293b' } else { $settings.ThemeSecondaryColor })"
-            Write-Host "21. Report font: $(if ([string]::IsNullOrWhiteSpace($settings.ReportFontFamily)) { 'Segoe UI' } else { $settings.ReportFontFamily })"
-            Write-Host '22. Open native Windows settings form'
-            Write-Host 'B. Back'
-
-            $selection = Read-Host 'Select an option'
-            if ([string]::IsNullOrWhiteSpace($selection)) {
-                continue
-            }
-
-            $normalizedSelection = $selection.ToUpperInvariant()
-            switch ($normalizedSelection) {
-                '1' {
-                    Write-Host "Browser is currently set to: $($settings.BrowserPopout)" -ForegroundColor Green
-                }
-                '2' {
-                    do {
-                        Clear-Host
-                        Write-Host 'Select Browser for Reports' -ForegroundColor Cyan
-                        Write-Host '1. Edge'
-                        Write-Host '2. Firefox'
-                        Write-Host '3. Chrome'
-                        Write-Host '4. Brave'
-                        Write-Host '5. Default (system default browser)'
-                        Write-Host '6. None (console table only)'
-                        Write-Host 'B. Back'
-
-                        $browserSelection = Read-Host 'Select a browser'
-                        if ([string]::IsNullOrWhiteSpace($browserSelection)) {
-                            continue
-                        }
-
-                        $normalizedBrowserSelection = $browserSelection.ToUpperInvariant()
-                        $selectedBrowser = $null
-
-                        switch ($normalizedBrowserSelection) {
-                            '1' { $selectedBrowser = 'Edge' }
-                            '2' { $selectedBrowser = 'Firefox' }
-                            '3' { $selectedBrowser = 'Chrome' }
-                            '4' { $selectedBrowser = 'Brave' }
-                            '5' { $selectedBrowser = 'Default' }
-                            '6' { $selectedBrowser = 'None' }
-                            'B' { break }
-                            Default { 
-                                Write-Warning 'Unknown selection.'
-                                Read-Host 'Press Enter to continue' | Out-Null
-                                continue
-                            }
-                        }
-
-                        if ($selectedBrowser) {
-                            Set-M365UiSettings -BrowserPopout $selectedBrowser | Out-Null
-                            Write-Host "Browser set to: $selectedBrowser" -ForegroundColor Green
-                            Read-Host 'Press Enter to continue' | Out-Null
-                            break
-                        }
-                    }
-                    while ($true)
-                }
-                '3' {
-                    Write-Host "Company name is currently: $(if ([string]::IsNullOrWhiteSpace($settings.CompanyName)) { '[Not set]' } else { $settings.CompanyName })" -ForegroundColor Green
-                }
-                '4' {
-                    Write-Host "Logo path is currently: $(if ([string]::IsNullOrWhiteSpace($settings.LogoPath)) { '[Not set]' } else { $settings.LogoPath })" -ForegroundColor Green
-                }
-                '5' {
-                    $companyName = Read-Host 'Enter company name (leave blank to clear)'
-                    Set-M365UiSettings -CompanyName $companyName | Out-Null
-                    Write-Host 'Company name saved.' -ForegroundColor Green
-                }
-                '6' {
-                    $logoPathInput = Read-Host 'Enter full logo path (png/jpg/svg). Leave blank to cancel'
-                    if ([string]::IsNullOrWhiteSpace($logoPathInput)) {
-                        Write-Host 'Logo path update canceled.' -ForegroundColor Yellow
-                    }
-                    elseif (-not (Test-Path -Path $logoPathInput)) {
-                        Write-Host 'Logo path not found. No changes were made.' -ForegroundColor Red
-                    }
-                    else {
-                        $resolvedLogoPath = Resolve-Path -Path $logoPathInput | Select-Object -ExpandProperty Path -First 1
-                        Set-M365UiSettings -LogoPath $resolvedLogoPath | Out-Null
-                        Write-Host "Logo path saved: $resolvedLogoPath" -ForegroundColor Green
-                    }
-                }
-                '7' {
-                    Set-M365UiSettings -LogoPath '' | Out-Null
-                    Write-Host 'Logo path cleared.' -ForegroundColor Green
-                }
-                '8' {
-                    if ([string]::IsNullOrWhiteSpace($settings.LogoPath)) {
-                        Write-Host 'Logo path is not set.' -ForegroundColor Yellow
-                    }
-                    elseif (-not (Test-Path -Path $settings.LogoPath)) {
-                        Write-Host "Logo path not found: $($settings.LogoPath)" -ForegroundColor Red
-                    }
-                    else {
-                        Start-Process -FilePath $settings.LogoPath
-                        Write-Host 'Opened logo preview.' -ForegroundColor Green
-                    }
-                }
-                '9' {
-                    Write-Host "Report save path is currently: $(if ([string]::IsNullOrWhiteSpace($settings.ReportSavePath)) { '[Default: Documents\\M365-Exchange-Exports]' } else { $settings.ReportSavePath })" -ForegroundColor Green
-                }
-                '10' {
-                    $savePathInput = Read-Host 'Enter report save path (example: C:\Reports\M365). Leave blank to use default in Documents'
-                    if ([string]::IsNullOrWhiteSpace($savePathInput)) {
-                        Set-M365UiSettings -ReportSavePath '' | Out-Null
-                        Write-Host 'Report save path reset to default.' -ForegroundColor Green
-                    }
-                    else {
-                        $resolvedSavePath = [System.IO.Path]::GetFullPath($savePathInput)
-                        Set-M365UiSettings -ReportSavePath $resolvedSavePath | Out-Null
-                        Write-Host "Report save path saved: $resolvedSavePath" -ForegroundColor Green
-                    }
-                }
-                '11' {
-                    Write-Host "File name template is currently: $($settings.FileNameTemplate)" -ForegroundColor Green
-                    Write-Host 'Supported tokens: {Title} {Timestamp} {Date} {Time} {CompanyName}' -ForegroundColor DarkCyan
-                }
-                '12' {
-                    $templateInput = Read-Host 'Enter file name template (example: {CompanyName}-{Title}-{Date}-{Time}; tokens: {Title} {Timestamp} {Date} {Time} {CompanyName})'
-                    if ([string]::IsNullOrWhiteSpace($templateInput)) {
-                        Set-M365UiSettings -FileNameTemplate '{Title}-{Timestamp}' | Out-Null
-                        Write-Host 'File name template reset to default.' -ForegroundColor Green
-                    }
-                    else {
-                        Set-M365UiSettings -FileNameTemplate $templateInput | Out-Null
-                        Write-Host "File name template saved: $templateInput" -ForegroundColor Green
-                    }
-                }
-                '13' {
-                    Write-Host "HTML branding enabled is currently: $($settings.HtmlBrandingEnabled)" -ForegroundColor Green
-                }
-                '14' {
-                    $newValue = -not [bool]$settings.HtmlBrandingEnabled
-                    Set-M365UiSettings -HtmlBrandingEnabled $newValue | Out-Null
-                    Write-Host "HTML branding enabled set to: $newValue" -ForegroundColor Green
-                }
-                '15' {
-                    Write-Host "Show company name in HTML is currently: $($settings.HtmlShowCompanyName)" -ForegroundColor Green
-                }
-                '16' {
-                    $newValue = -not [bool]$settings.HtmlShowCompanyName
-                    Set-M365UiSettings -HtmlShowCompanyName $newValue | Out-Null
-                    Write-Host "Show company name in HTML set to: $newValue" -ForegroundColor Green
-                }
-                '17' {
-                    Write-Host "Show company logo in HTML is currently: $($settings.HtmlShowCompanyLogo)" -ForegroundColor Green
-                }
-                '18' {
-                    $newValue = -not [bool]$settings.HtmlShowCompanyLogo
-                    Set-M365UiSettings -HtmlShowCompanyLogo $newValue | Out-Null
-                    Write-Host "Show company logo in HTML set to: $newValue" -ForegroundColor Green
-                }
-                '19' {
-                    Write-Host "Primary color is currently: $(if ([string]::IsNullOrWhiteSpace($settings.ThemePrimaryColor)) { '#0f766e' } else { $settings.ThemePrimaryColor })" -ForegroundColor Green
-                }
-                '20' {
-                    Write-Host "Secondary color is currently: $(if ([string]::IsNullOrWhiteSpace($settings.ThemeSecondaryColor)) { '#1e293b' } else { $settings.ThemeSecondaryColor })" -ForegroundColor Green
-                }
-                '21' {
-                    Write-Host "Report font is currently: $(if ([string]::IsNullOrWhiteSpace($settings.ReportFontFamily)) { 'Segoe UI' } else { $settings.ReportFontFamily })" -ForegroundColor Green
-                }
-                '22' {
-                    Show-M365WindowsConfigurationForm
-                    Write-Host 'Native Windows configuration form closed.' -ForegroundColor Green
-                }
-                'B' {
-                    return
-                }
-                Default {
-                    Write-Warning 'Unknown selection.'
-                }
-            }
-
-            if ($normalizedSelection -ne 'B') {
-                Read-Host 'Press Enter to continue' | Out-Null
-            }
-        }
-        while ($true)
     }
 
     do {
@@ -1221,6 +1845,8 @@ function Show-M365ExchangeMenu {
         Write-Host '3. Check prerequisites' -ForegroundColor Green
         Write-Host '4. Configuration' -ForegroundColor Green
         Write-Host '5. Feature availability' -ForegroundColor Green
+        Write-Host '6. Tenant Assessment' -ForegroundColor Green
+        Write-Host '7. Active Directory Assessment' -ForegroundColor Green
         Write-Host 'Q. Quit'
 
         $selection = Read-Host 'Select an option'
@@ -1245,11 +1871,18 @@ function Show-M365ExchangeMenu {
                     Show-M365Prerequisites -PromptForActions
                 }
                 '4' {
-                    $skipContinuePrompt = $true
-                    Show-M365ConfigurationMenu
+                    Show-M365WindowsConfigurationForm
                 }
                 '5' {
                     Show-M365FeatureAvailability
+                }
+                '6' {
+                    $skipContinuePrompt = $true
+                    Show-M365TenantAssessmentMenu
+                }
+                '7' {
+                    $skipContinuePrompt = $true
+                    Show-ADAssessmentMenu
                 }
                 'Q' {
                     Invoke-M365SignOutOnExit

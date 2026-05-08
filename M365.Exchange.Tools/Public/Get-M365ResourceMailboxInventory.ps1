@@ -5,32 +5,37 @@ function Get-M365ResourceMailboxInventory {
         [string]$ExportPath
     )
 
-    Assert-ExchangeOnlineConnected
+    Assert-M365ExchangePowerShellConnected
 
-    $users = Get-M365GraphCollection -Uri 'https://graph.microsoft.com/v1.0/users?$top=999&$select=id,displayName,mail,officeLocation,createdDateTime'
-    $results = foreach ($user in $users | Sort-Object displayName) {
-        if ([string]::IsNullOrWhiteSpace($user.mail)) {
-            continue
-        }
+    Write-Host 'Retrieving resource mailboxes from Exchange Online...' -ForegroundColor Cyan
 
-        try {
-            $mailboxSettings = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/v1.0/users/$($user.id)/mailboxSettings?`$select=userPurpose" -OutputType PSObject -ErrorAction Stop
-        }
-        catch {
-            continue
-        }
+    # RoomMailbox and EquipmentMailbox are the two RecipientTypeDetails values for resources.
+    $mailboxes = @(
+        Get-EXOMailbox -ResultSize Unlimited `
+            -Filter "RecipientTypeDetails -eq 'RoomMailbox' -or RecipientTypeDetails -eq 'EquipmentMailbox'" `
+            -Properties DisplayName, PrimarySmtpAddress, Alias,
+                        RecipientTypeDetails, Office,
+                        HiddenFromAddressListsEnabled, WhenCreated,
+                        ResourceCapacity, LitigationHoldEnabled, RetentionPolicy `
+            -ErrorAction Stop |
+            Sort-Object DisplayName
+    )
 
-        if (($mailboxSettings.userPurpose -ne 'room') -and ($mailboxSettings.userPurpose -ne 'equipment')) {
-            continue
-        }
+    Write-Host "Found $($mailboxes.Count) resource mailbox(es)." -ForegroundColor DarkCyan
 
+    $results = foreach ($mbx in $mailboxes) {
         [pscustomobject]@{
-            DisplayName          = $user.displayName
-            PrimarySmtpAddress   = $user.mail
-            RecipientTypeDetails = $mailboxSettings.userPurpose
-            Office               = $user.officeLocation
-            WhenCreated          = $user.createdDateTime
-            MailboxKind          = 'Resource'
+            DisplayName                   = $mbx.DisplayName
+            PrimarySmtpAddress            = $mbx.PrimarySmtpAddress
+            Alias                         = $mbx.Alias
+            ResourceType                  = $mbx.RecipientTypeDetails  # RoomMailbox / EquipmentMailbox
+            Office                        = $mbx.Office
+            ResourceCapacity              = $mbx.ResourceCapacity
+            HiddenFromAddressListsEnabled = $mbx.HiddenFromAddressListsEnabled
+            LitigationHoldEnabled         = $mbx.LitigationHoldEnabled
+            RetentionPolicy               = $mbx.RetentionPolicy
+            WhenCreated                   = $mbx.WhenCreated
+            MailboxKind                   = 'Resource'
         }
     }
 

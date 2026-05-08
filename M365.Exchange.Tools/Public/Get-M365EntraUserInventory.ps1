@@ -9,7 +9,26 @@ function Get-M365EntraUserInventory {
         [string]$ExportPath
     )
 
-    Assert-ExchangeOnlineConnected
+    Assert-M365ExchangePowerShellConnected
+
+    # Pre-fetch mailbox type from Exchange in one call — keyed by ExternalDirectoryObjectId
+    # (= Entra Object ID). This replaces per-user mailboxSettings Graph calls.
+    $mailboxTypeById = @{}
+    $mailboxTypeStatus = 'Available'
+    try {
+        $exoMailboxes = Get-EXOMailbox -ResultSize Unlimited `
+            -Properties ExternalDirectoryObjectId, RecipientTypeDetails `
+            -ErrorAction Stop
+        foreach ($mbx in $exoMailboxes) {
+            $oid = [string]$mbx.ExternalDirectoryObjectId
+            if (-not [string]::IsNullOrWhiteSpace($oid)) {
+                $mailboxTypeById[$oid] = [string]$mbx.RecipientTypeDetails
+            }
+        }
+    }
+    catch {
+        $mailboxTypeStatus = "EXO mailbox type lookup failed: $($_.Exception.Message)"
+    }
 
     $users = @()
     $signInActivityStatus = 'Available'
@@ -53,26 +72,13 @@ function Get-M365EntraUserInventory {
             $mailboxKind = 'Guest'
         }
         else {
-            try {
-                $mailboxSettings = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/v1.0/users/$($user.id)/mailboxSettings?`$select=userPurpose" -OutputType PSObject -ErrorAction Stop
-                $userPurpose = [string]$mailboxSettings.userPurpose
-                switch ($userPurpose.ToLowerInvariant()) {
-                    'shared' {
-                        $mailboxKind = 'Shared'
-                    }
-                    'room' {
-                        $mailboxKind = 'Resource'
-                    }
-                    'equipment' {
-                        $mailboxKind = 'Resource'
-                    }
-                    default {
-                        $mailboxKind = 'User'
-                    }
-                }
-            }
-            catch {
-                $mailboxKind = 'User'
+            $oid = [string]$user.id
+            $recipientType = if ($mailboxTypeById.ContainsKey($oid)) { $mailboxTypeById[$oid] } else { '' }
+            $mailboxKind = switch ($recipientType) {
+                'SharedMailbox'    { 'Shared' }
+                'RoomMailbox'      { 'Resource' }
+                'EquipmentMailbox' { 'Resource' }
+                default            { 'User' }
             }
         }
 

@@ -33,7 +33,11 @@ function Set-M365UiSettings {
         [string]$ThemeSecondaryColor,
 
         [Parameter()]
-        [string]$ReportFontFamily
+        [string]$ReportFontFamily,
+
+        [Parameter()]
+        [ValidateSet('Auto', 'Interactive', 'DisableWAM', 'Device')]
+        [string]$ExchangeAuthMode
     )
 
     $moduleRoot = Split-Path -Path $PSScriptRoot -Parent
@@ -58,6 +62,7 @@ function Set-M365UiSettings {
         ThemePrimaryColor   = if ($PSBoundParameters.ContainsKey('ThemePrimaryColor')) { [string]$ThemePrimaryColor } else { [string]$currentSettings.ThemePrimaryColor }
         ThemeSecondaryColor = if ($PSBoundParameters.ContainsKey('ThemeSecondaryColor')) { [string]$ThemeSecondaryColor } else { [string]$currentSettings.ThemeSecondaryColor }
         ReportFontFamily    = if ($PSBoundParameters.ContainsKey('ReportFontFamily')) { [string]$ReportFontFamily } else { [string]$currentSettings.ReportFontFamily }
+        ExchangeAuthMode    = if ($PSBoundParameters.ContainsKey('ExchangeAuthMode')) { [string]$ExchangeAuthMode } else { [string]$currentSettings.ExchangeAuthMode }
     }
 
     $settings | ConvertTo-Json -Depth 5 | Set-Content -Path $settingsPath -Encoding UTF8

@@ -5,32 +5,35 @@ function Get-M365SharedMailboxInventory {
         [string]$ExportPath
     )
 
-    Assert-ExchangeOnlineConnected
+    Assert-M365ExchangePowerShellConnected
 
-    $users = Get-M365GraphCollection -Uri 'https://graph.microsoft.com/v1.0/users?$top=999&$select=id,displayName,mail,mailNickname,createdDateTime'
-    $results = foreach ($user in $users | Sort-Object displayName) {
-        if ([string]::IsNullOrWhiteSpace($user.mail)) {
-            continue
-        }
+    Write-Host 'Retrieving shared mailboxes from Exchange Online...' -ForegroundColor Cyan
 
-        try {
-            $mailboxSettings = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/v1.0/users/$($user.id)/mailboxSettings?`$select=userPurpose" -OutputType PSObject -ErrorAction Stop
-        }
-        catch {
-            continue
-        }
+    $mailboxes = @(
+        Get-EXOMailbox -ResultSize Unlimited `
+            -Filter "RecipientTypeDetails -eq 'SharedMailbox'" `
+            -Properties DisplayName, PrimarySmtpAddress, Alias,
+                        HiddenFromAddressListsEnabled, WhenCreated,
+                        ForwardingSmtpAddress, DeliverToMailboxAndForward,
+                        LitigationHoldEnabled, RetentionPolicy `
+            -ErrorAction Stop |
+            Sort-Object DisplayName
+    )
 
-        if ($mailboxSettings.userPurpose -ne 'shared') {
-            continue
-        }
+    Write-Host "Found $($mailboxes.Count) shared mailbox(es)." -ForegroundColor DarkCyan
 
+    $results = foreach ($mbx in $mailboxes) {
         [pscustomobject]@{
-            DisplayName                 = $user.displayName
-            PrimarySmtpAddress          = $user.mail
-            Alias                       = $user.mailNickname
-            HiddenFromAddressListsEnabled = $null
-            WhenCreated                 = $user.createdDateTime
-            MailboxKind                 = 'Shared'
+            DisplayName                   = $mbx.DisplayName
+            PrimarySmtpAddress            = $mbx.PrimarySmtpAddress
+            Alias                         = $mbx.Alias
+            HiddenFromAddressListsEnabled = $mbx.HiddenFromAddressListsEnabled
+            ForwardingSmtpAddress         = $mbx.ForwardingSmtpAddress
+            DeliverToMailboxAndForward    = $mbx.DeliverToMailboxAndForward
+            LitigationHoldEnabled         = $mbx.LitigationHoldEnabled
+            RetentionPolicy               = $mbx.RetentionPolicy
+            WhenCreated                   = $mbx.WhenCreated
+            MailboxKind                   = 'Shared'
         }
     }
 

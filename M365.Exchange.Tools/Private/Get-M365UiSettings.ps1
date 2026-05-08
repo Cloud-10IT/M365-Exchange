@@ -14,6 +14,7 @@ function Get-M365UiSettings {
         ThemePrimaryColor    = '#0f766e'
         ThemeSecondaryColor  = '#1e293b'
         ReportFontFamily     = 'Segoe UI'
+        ExchangeAuthMode     = 'Auto'
     }
 
     if (-not (Test-Path -Path $settingsPath)) {
@@ -55,5 +56,6 @@ function Get-M365UiSettings {
         ThemePrimaryColor   = if ([string]::IsNullOrWhiteSpace([string]$settings.ThemePrimaryColor)) { '#0f766e' } else { [string]$settings.ThemePrimaryColor }
         ThemeSecondaryColor = if ([string]::IsNullOrWhiteSpace([string]$settings.ThemeSecondaryColor)) { '#1e293b' } else { [string]$settings.ThemeSecondaryColor }
         ReportFontFamily    = if ([string]::IsNullOrWhiteSpace([string]$settings.ReportFontFamily)) { 'Segoe UI' } else { [string]$settings.ReportFontFamily }
+        ExchangeAuthMode    = if ([string]::IsNullOrWhiteSpace([string]$settings.ExchangeAuthMode)) { 'Auto' } else { [string]$settings.ExchangeAuthMode }
     }
 }

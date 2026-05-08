@@ -22,6 +22,7 @@ $sanitized = [ordered]@{
     ThemePrimaryColor   = '#0f766e'
     ThemeSecondaryColor = '#1e293b'
     ReportFontFamily    = 'Segoe UI'
+    ExchangeAuthMode    = 'Auto'
 }
 
 $json = $sanitized | ConvertTo-Json -Depth 5
