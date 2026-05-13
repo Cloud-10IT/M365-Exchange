@@ -11,6 +11,11 @@ function Connect-M365ExchangeTools {
 
     Import-Module Microsoft.Graph.Authentication -ErrorAction Stop | Out-Null
 
+    if (Test-ExchangeOnlineConnection) {
+        Write-Host 'Microsoft Graph connection already active.' -ForegroundColor Green
+        return
+    }
+
     $requiredScopes = @(
         'User.Read.All',
         'Group.Read.All',
@@ -22,13 +27,8 @@ function Connect-M365ExchangeTools {
         'AuditLog.Read.All'
     )
 
-    if (Test-M365GraphConnection -RequiredScopes $requiredScopes -RequireAllScopes) {
-        Write-Host 'Microsoft Graph connection already active.' -ForegroundColor Green
-        return
-    }
-
     $connectParams = @{
-        Scopes = $requiredScopes
+        Scopes   = $requiredScopes
         NoWelcome = $true
     }
 
@@ -36,15 +36,15 @@ function Connect-M365ExchangeTools {
         Write-Host 'UserPrincipalName is not used by Microsoft Graph interactive sign-in and will be ignored.' -ForegroundColor DarkYellow
     }
 
-    Connect-MgGraph @connectParams -ErrorAction Stop
+    Connect-MgGraph @connectParams
 
     $selectProfileCommand = Get-Command -Name Select-MgProfile -ErrorAction SilentlyContinue
     if ($selectProfileCommand) {
         Select-MgProfile -Name 'v1.0' | Out-Null
     }
 
-    if (-not (Test-M365GraphConnection -RequiredScopes $requiredScopes -RequireAllScopes)) {
-        throw 'Sign-in completed but a Microsoft Graph context with the required scopes was not detected. Try reconnecting, then run Check prerequisites to verify module and session state.'
+    if (-not (Test-ExchangeOnlineConnection)) {
+        throw 'Sign-in completed but a Microsoft Graph context was not detected. Try reconnecting, then run Check prerequisites to verify module and session state.'
     }
 
     Write-Host 'Connected to Microsoft Graph.' -ForegroundColor Green

@@ -34,22 +34,53 @@ function Get-M365AIApplicationUsageReport {
         return $text.ToLowerInvariant()
     }
 
+    function Ensure-StringArray {
+        param([object]$Item)
+        if ($null -eq $Item) { return @() }
+        if ($Item -is [string]) { return @($Item) }
+        return @($Item)
+    }
+
     function Test-AnyMatch {
         param(
-            [Parameter(Mandatory)]
-            [string[]]$Values,
+            [Parameter()]
+            [object]$Values,
 
-            [Parameter(Mandatory)]
-            [string[]]$Terms
+            [Parameter()]
+            [object]$Terms
         )
 
-        foreach ($value in @($Values)) {
+        $valueList = @(
+            foreach ($v in @($Values)) {
+                if ($null -eq $v) { continue }
+                [string]$s = [string]$v
+                if (-not [string]::IsNullOrWhiteSpace($s)) {
+                    $s
+                }
+            }
+        )
+
+        $termList = @(
+            foreach ($t in @($Terms)) {
+                if ($null -eq $t) { continue }
+                [string]$s = [string]$t
+                if (-not [string]::IsNullOrWhiteSpace($s)) {
+                    $s
+                }
+            }
+        )
+
+        if ($valueList.Count -lt 1 -or $termList.Count -lt 1) {
+            return $false
+        }
+
+        foreach ($value in $valueList) {
             $candidate = ConvertTo-LowerSafe -Value $value
             if ([string]::IsNullOrWhiteSpace($candidate)) {
                 continue
             }
 
-            foreach ($term in @($Terms)) {
+            foreach ($term in $termList) {
                 $needle = ConvertTo-LowerSafe -Value $term
                 if (-not [string]::IsNullOrWhiteSpace($needle) -and $candidate.Contains($needle)) {
                     return $true
@@ -223,15 +254,22 @@ function Get-M365AIApplicationUsageReport {
     }
 
     $results = foreach ($app in $catalog) {
+        $terms = @(
+            @(Ensure-StringArray $app.MatchTerms) + @(Ensure-StringArray $app.MatchDomains) |
+                ForEach-Object { [string]$_ } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                Select-Object -Unique
+        )
+
         $matchingEnterpriseApps = @(
             $servicePrincipals | Where-Object {
-                Test-AnyMatch -Values @($_.displayName, $_.publisherName, $_.homepage) -Terms @($app.MatchTerms + $app.MatchDomains)
+                Test-AnyMatch -Values @($_.displayName, $_.publisherName, $_.homepage) -Terms $terms
             }
         )
 
         $matchingSignIns = @(
             $signIns | Where-Object {
-                Test-AnyMatch -Values @($_.appDisplayName, $_.resourceDisplayName) -Terms @($app.MatchTerms + $app.MatchDomains)
+                Test-AnyMatch -Values @($_.appDisplayName, $_.resourceDisplayName) -Terms $terms
             }
         )
 

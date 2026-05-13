@@ -30,22 +30,39 @@ function Get-M365TenantCapabilities {
         catch {
         }
 
-        if ($textInfo) {
-            $friendly = $textInfo.ToTitleCase($friendly.ToLowerInvariant())
+        if ($textInfo -and -not [string]::IsNullOrWhiteSpace($friendly)) {
+            try {
+                $friendly = $textInfo.ToTitleCase($friendly.ToLowerInvariant())
+            }
+            catch {
+            }
         }
 
         # Restore common product acronyms after title-casing.
-        $friendly = $friendly -replace '\bM365\b', 'M365'
-        $friendly = $friendly -replace '\bO365\b', 'O365'
-        $friendly = $friendly -replace '\bId\b', 'ID'
-        $friendly = $friendly -replace '\bE[135]\b', { param($m) $m.Value.ToUpperInvariant() }
-        $friendly = $friendly -replace '\bF[13]\b', { param($m) $m.Value.ToUpperInvariant() }
-        $friendly = $friendly -replace '\bP[125]\b', { param($m) $m.Value.ToUpperInvariant() }
+        # Use [regex]::Replace (not -replace with scriptblocks) for Windows PowerShell 5.1 compatibility.
+        $friendly = [regex]::Replace($friendly, '\bM365\b', 'M365')
+        $friendly = [regex]::Replace($friendly, '\bO365\b', 'O365')
+        $friendly = [regex]::Replace($friendly, '\bId\b', 'ID')
+        $friendly = [regex]::Replace($friendly, '\bE[135]\b', {
+                param([System.Text.RegularExpressions.Match]$m)
+                if ($null -eq $m) { return '' }
+                return $m.Value.ToUpperInvariant()
+            })
+        $friendly = [regex]::Replace($friendly, '\bF[13]\b', {
+                param([System.Text.RegularExpressions.Match]$m)
+                if ($null -eq $m) { return '' }
+                return $m.Value.ToUpperInvariant()
+            })
+        $friendly = [regex]::Replace($friendly, '\bP[125]\b', {
+                param([System.Text.RegularExpressions.Match]$m)
+                if ($null -eq $m) { return '' }
+                return $m.Value.ToUpperInvariant()
+            })
 
         return $friendly
     }
 
-    $isGraphConnected = Test-ExchangeOnlineConnection
+    $isGraphConnected = Test-M365GraphConnection
     $isExchangeConnected = Test-M365ExchangePowerShellConnection
 
     $hasSearchUnifiedAuditLog = [bool](Get-Command -Name Search-UnifiedAuditLog -ErrorAction SilentlyContinue)
@@ -72,7 +89,8 @@ function Get-M365TenantCapabilities {
                     $currentScopes = @($mgCtx.Scopes)
                 }
             }
-            catch {}
+            catch {
+            }
 
             $requiredScope = 'Organization.Read.All'
             $hasScopeAccess = ($currentScopes -contains $requiredScope) -or
@@ -84,113 +102,131 @@ function Get-M365TenantCapabilities {
                 $licenseStatusDetail = "Graph token does not include '$requiredScope'. Re-connect with that scope to view SKU data."
             }
             else {
-            try {
-                $skus = @(Get-MgSubscribedSku -All -ErrorAction Stop)
+                try {
+                    $skus = @(Get-MgSubscribedSku -All -ErrorAction Stop)
 
-                $catalogRows = [System.Collections.Generic.List[object]]::new()
-                $servicePlanRows = [System.Collections.Generic.List[object]]::new()
+                    $catalogRows = [System.Collections.Generic.List[object]]::new()
+                    $servicePlanRows = [System.Collections.Generic.List[object]]::new()
 
-                foreach ($sku in $skus) {
-                    if ($null -eq $sku) {
-                        continue
-                    }
-
-                    try {
-                        $skuPartNumber = [string]$sku.SkuPartNumber
-                        if ([string]::IsNullOrWhiteSpace($skuPartNumber)) {
+                    foreach ($sku in $skus) {
+                        if ($null -eq $sku) {
                             continue
                         }
 
-                        $catalogRows.Add([pscustomobject]@{
-                            SkuFriendlyName = ConvertTo-M365FriendlyLabel -Value $skuPartNumber
-                            SkuPartNumber   = $skuPartNumber
-                            SkuId           = [string]$sku.SkuId
-                        })
-
-                        $servicePlans = @()
-                        if ($null -ne $sku.ServicePlans) {
-                            $servicePlans = @($sku.ServicePlans)
-                        }
-
-                        foreach ($servicePlan in $servicePlans) {
-                            if ($null -eq $servicePlan) {
+                        try {
+                            $skuPartNumber = [string]$sku.SkuPartNumber
+                            if ([string]::IsNullOrWhiteSpace($skuPartNumber)) {
                                 continue
                             }
 
-                            try {
-                                $servicePlanId = [string]$servicePlan.ServicePlanId
-                                if ([string]::IsNullOrWhiteSpace($servicePlanId)) {
+                            $catalogRows.Add([pscustomobject]@{
+                                SkuFriendlyName = ConvertTo-M365FriendlyLabel -Value $skuPartNumber
+                                SkuPartNumber   = $skuPartNumber
+                                SkuId           = [string]$sku.SkuId
+                            })
+
+                            $servicePlans = @()
+                            if ($null -ne $sku.ServicePlans) {
+                                $servicePlans = @($sku.ServicePlans)
+                            }
+
+                            foreach ($servicePlan in $servicePlans) {
+                                if ($null -eq $servicePlan) {
                                     continue
                                 }
 
-                                $servicePlanName = [string]$servicePlan.ServicePlanName
+                                try {
+                                    $servicePlanName = ''
+                                    $servicePlanId = ''
+                                    $provisioningStatus = ''
 
-                                $servicePlanRows.Add([pscustomobject]@{
-                                    SkuFriendlyName         = ConvertTo-M365FriendlyLabel -Value $skuPartNumber
-                                    SkuPartNumber           = $skuPartNumber
-                                    ServicePlanFriendlyName = ConvertTo-M365FriendlyLabel -Value $servicePlanName
-                                    ServicePlanName         = $servicePlanName
-                                    ServicePlanId           = $servicePlanId
-                                    ProvisioningStatus      = [string]$servicePlan.ProvisioningStatus
-                                })
-                            }
-                            catch {
-                                $skuProcessingErrors.Add("Skipped service plan under SKU '$skuPartNumber': $($_.Exception.Message)") | Out-Null
+                                    if ($servicePlan.PSObject.Properties.Name -contains 'ServicePlanName' -and $null -ne $servicePlan.ServicePlanName) {
+                                        $servicePlanName = [string]$servicePlan.ServicePlanName
+                                    }
+
+                                    if ($servicePlan.PSObject.Properties.Name -contains 'ServicePlanId' -and $null -ne $servicePlan.ServicePlanId) {
+                                        $servicePlanId = [string]$servicePlan.ServicePlanId
+                                    }
+
+                                    if ($servicePlan.PSObject.Properties.Name -contains 'ProvisioningStatus' -and $null -ne $servicePlan.ProvisioningStatus) {
+                                        $provisioningStatus = [string]$servicePlan.ProvisioningStatus
+                                    }
+
+                                    if ([string]::IsNullOrWhiteSpace($servicePlanName) -and [string]::IsNullOrWhiteSpace($servicePlanId)) {
+                                        continue
+                                    }
+
+                                    $servicePlanFriendlyName = ''
+                                    if (-not [string]::IsNullOrWhiteSpace($servicePlanName)) {
+                                        $servicePlanFriendlyName = ConvertTo-M365FriendlyLabel -Value $servicePlanName
+                                    }
+
+                                    $servicePlanRows.Add([pscustomobject]@{
+                                        SkuFriendlyName         = ConvertTo-M365FriendlyLabel -Value $skuPartNumber
+                                        SkuPartNumber           = $skuPartNumber
+                                        ServicePlanFriendlyName = $servicePlanFriendlyName
+                                        ServicePlanName         = $servicePlanName
+                                        ServicePlanId           = $servicePlanId
+                                        ProvisioningStatus      = $provisioningStatus
+                                    })
+                                }
+                                catch {
+                                    $skuProcessingErrors.Add("Skipped service plan under SKU '$skuPartNumber': $($_.Exception.Message)") | Out-Null
+                                }
                             }
                         }
+                        catch {
+                            $skuLabel = ''
+                            try { $skuLabel = [string]$sku.SkuPartNumber } catch {}
+                            if ([string]::IsNullOrWhiteSpace($skuLabel)) { $skuLabel = '<unknown sku>' }
+                            $skuProcessingErrors.Add("Skipped SKU '$skuLabel': $($_.Exception.Message)") | Out-Null
+                        }
                     }
-                    catch {
-                        $skuLabel = ''
-                        try { $skuLabel = [string]$sku.SkuPartNumber } catch {}
-                        if ([string]::IsNullOrWhiteSpace($skuLabel)) { $skuLabel = '<unknown sku>' }
-                        $skuProcessingErrors.Add("Skipped SKU '$skuLabel': $($_.Exception.Message)") | Out-Null
+
+                    $skuCatalog = @($catalogRows) | Sort-Object SkuFriendlyName, SkuPartNumber -Unique
+                    $skuPartNumbers = @($skuCatalog | ForEach-Object { $_.SkuPartNumber })
+                    $skuServicePlans = @($servicePlanRows) | Sort-Object SkuFriendlyName, SkuPartNumber, ServicePlanFriendlyName, ServicePlanName, ServicePlanId, ProvisioningStatus -Unique
+
+                    $plan2Indicators = @(
+                        'ENTERPRISEPACK',        # Office 365 E3
+                        'ENTERPRISEPREMIUM',     # Office 365 E5
+                        'M365_E3',               # Microsoft 365 E3
+                        'M365_E5',               # Microsoft 365 E5
+                        'EXCHANGEENTERPRISE',    # Exchange Online Plan 2
+                        'SPE_E3',                # Microsoft 365 E3 (new family)
+                        'SPE_E5'                 # Microsoft 365 E5 (new family)
+                    )
+
+                    $purviewAuditIndicators = @(
+                        'ENTERPRISEPREMIUM',                 # Office 365 E5
+                        'M365_E5',                          # Microsoft 365 E5
+                        'SPE_E5',                           # Microsoft 365 E5 (new family)
+                        'MICROSOFT_365_E5_COMPLIANCE',
+                        'IDENTITY_THREAT_PROTECTION'
+                    )
+
+                    foreach ($sku in $skuPartNumbers) {
+                        if ($plan2Indicators -contains $sku) {
+                            $hasExchangePlan2OrBetter = $true
+                        }
+                        if ($purviewAuditIndicators -contains $sku) {
+                            $hasPurviewAuditPremium = $true
+                        }
+                    }
+
+                    $licenseStatus = if ($skuPartNumbers.Count -gt 0) { 'Detected' } else { 'NoneFound' }
+                    if ($skuProcessingErrors.Count -gt 0) {
+                        if ($skuPartNumbers.Count -gt 0 -or $skuServicePlans.Count -gt 0) {
+                            $licenseStatus = 'PartialData'
+                        }
+                        $licenseStatusDetail = ($skuProcessingErrors | Select-Object -Unique | Select-Object -First 3) -join ' | '
                     }
                 }
-
-                $skuCatalog = @($catalogRows) | Sort-Object SkuFriendlyName, SkuPartNumber -Unique
-                $skuPartNumbers = @($skuCatalog | ForEach-Object { $_.SkuPartNumber })
-                $skuServicePlans = @($servicePlanRows) | Sort-Object SkuFriendlyName, SkuPartNumber, ServicePlanFriendlyName, ServicePlanName, ServicePlanId, ProvisioningStatus -Unique
-
-                $plan2Indicators = @(
-                    'ENTERPRISEPACK',            # Office 365 E3
-                    'ENTERPRISEPREMIUM',         # Office 365 E5
-                    'M365_E3',                   # Microsoft 365 E3
-                    'M365_E5',                   # Microsoft 365 E5
-                    'EXCHANGEENTERPRISE',        # Exchange Online Plan 2
-                    'SPE_E3',                    # Microsoft 365 E3 (new family)
-                    'SPE_E5'                     # Microsoft 365 E5 (new family)
-                )
-
-                $purviewAuditIndicators = @(
-                    'ENTERPRISEPREMIUM',         # Office 365 E5
-                    'M365_E5',                   # Microsoft 365 E5
-                    'SPE_E5',                    # Microsoft 365 E5 (new family)
-                    'MICROSOFT_365_E5_COMPLIANCE',
-                    'IDENTITY_THREAT_PROTECTION'
-                )
-
-                foreach ($sku in $skuPartNumbers) {
-                    if ($plan2Indicators -contains $sku) {
-                        $hasExchangePlan2OrBetter = $true
-                    }
-                    if ($purviewAuditIndicators -contains $sku) {
-                        $hasPurviewAuditPremium = $true
-                    }
-                }
-
-                $licenseStatus = if ($skuPartNumbers.Count -gt 0) { 'Detected' } else { 'NoneFound' }
-                if ($skuProcessingErrors.Count -gt 0) {
-                    if ($skuPartNumbers.Count -gt 0 -or $skuServicePlans.Count -gt 0) {
-                        $licenseStatus = 'PartialData'
-                    }
-                    $licenseStatusDetail = ($skuProcessingErrors | Select-Object -First 3) -join ' | '
+                catch {
+                    $licenseStatus = 'Error'
+                    $licenseStatusDetail = $_.Exception.Message
                 }
             }
-            catch {
-                $licenseStatus = 'Error'
-                $licenseStatusDetail = $_.Exception.Message
-            }
-            } # end scope check else
         }
         else {
             $licenseStatus = 'SkuCmdletMissing'
@@ -199,17 +235,17 @@ function Get-M365TenantCapabilities {
     }
 
     [pscustomobject]@{
-        IsGraphConnected            = $isGraphConnected
-        IsExchangeConnected         = $isExchangeConnected
-        LicenseStatus               = $licenseStatus
-        LicenseStatusDetail         = $licenseStatusDetail
-        SkuPartNumbers              = $skuPartNumbers
-        SkuCatalog                  = $skuCatalog
-        SkuServicePlans             = $skuServicePlans
-        HasExchangePlan2OrBetter    = $hasExchangePlan2OrBetter
-        HasPurviewAuditPremium      = $hasPurviewAuditPremium
-        HasSearchUnifiedAuditLog    = $hasSearchUnifiedAuditLog
-        HasSearchMailboxAuditLog    = $hasSearchMailboxAuditLog
-        CanRunMailboxDeletionAudit  = ($canRunMailboxDeletionAuditByCmd -and ($isExchangeConnected -or $isGraphConnected))
+        IsGraphConnected           = $isGraphConnected
+        IsExchangeConnected        = $isExchangeConnected
+        LicenseStatus              = $licenseStatus
+        LicenseStatusDetail        = $licenseStatusDetail
+        SkuPartNumbers             = $skuPartNumbers
+        SkuCatalog                 = $skuCatalog
+        SkuServicePlans            = $skuServicePlans
+        HasExchangePlan2OrBetter   = $hasExchangePlan2OrBetter
+        HasPurviewAuditPremium     = $hasPurviewAuditPremium
+        HasSearchUnifiedAuditLog   = $hasSearchUnifiedAuditLog
+        HasSearchMailboxAuditLog   = $hasSearchMailboxAuditLog
+        CanRunMailboxDeletionAudit = ($canRunMailboxDeletionAuditByCmd -and ($isExchangeConnected -or $isGraphConnected))
     }
 }

@@ -1,4 +1,4 @@
-function Test-ExchangeOnlineConnection {
+function Assert-M365GraphConnected {
     [CmdletBinding()]
     param(
         [Parameter()]
@@ -14,6 +14,7 @@ function Test-ExchangeOnlineConnection {
         )
     )
 
-    # Legacy compatibility wrapper.
-    return (Test-M365GraphConnection -RequiredScopes $RequiredScopes -RequireAllScopes)
+    if (-not (Test-M365GraphConnection -RequiredScopes $RequiredScopes -RequireAllScopes)) {
+        throw 'Not connected to Microsoft Graph with the required scopes. Run Connect-M365ExchangeTools first.'
+    }
 }
